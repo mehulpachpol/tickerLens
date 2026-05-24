@@ -164,3 +164,52 @@ class DocumentChunkSpan(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class DocumentEmbeddingRun(Base):
+    __tablename__ = "document_embedding_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    parse_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    chunk_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vector_size: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    qdrant_collection: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    embedded_chunks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DocumentIndexRun(Base):
+    __tablename__ = "document_index_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    parse_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    chunk_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    backend: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="opensearch")
+    index_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    indexed_chunks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

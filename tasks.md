@@ -2,7 +2,7 @@
 ## Project Tasks — 11 Phases (Open‑Source + Free Stack)
 
 **Non‑negotiables**
-- **Only open-source + free** software for the platform components (runtime, DBs, indexes, observability, LLM serving).
+- **Platform components are open-source + free** (runtime, DBs, indexes, observability). **Models use OpenAI API** during early phases (paid), with a later option to switch to self-hosted open models.
 - **Citation-first** answers: every claim must map to an explicit source span (doc + page + chunk id).
 - **Temporal correctness**: answers must prefer the most recent relevant filings and clearly state dates.
 - **Auditability**: store lineage from raw doc → parsed text → chunks → embeddings → retrieval → answer.
@@ -17,8 +17,8 @@
 - **Keyword/BM25**: OpenSearch
 - **Cache**: Redis
 - **Queue/Event bus**: Apache Kafka (optional early; can start with Redis streams)
-- **LLM serving (local/self-hosted)**: Ollama or vLLM
-- **Embeddings / rerank**: Sentence-Transformers + BGE family (open models)
+- **LLM serving**: OpenAI API initially; later Ollama or vLLM for self-hosted models
+- **Embeddings / rerank**: OpenAI embeddings initially; later Sentence-Transformers + BGE family (open models)
 - **Observability**: OpenTelemetry + Prometheus + Grafana
 - **RAG traces/evals**: Langfuse (OSS) + Phoenix (OSS)
 

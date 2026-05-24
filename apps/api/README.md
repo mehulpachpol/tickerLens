@@ -35,3 +35,31 @@ In Docker Compose, a `migrate` service runs automatically before the API starts.
 - `GET /chunk-runs/{run_id}`
 - `GET /documents/{doc_id}/chunks`
 - `GET /chunks/{chunk_id}`
+- `POST /documents/{doc_id}/index`
+- `GET /documents/{doc_id}/index-runs`
+- `GET /index-runs/{run_id}`
+- `POST /documents/{doc_id}/embed`
+- `GET /documents/{doc_id}/embed-runs`
+- `GET /embed-runs/{run_id}`
+- `POST /search/vector`
+- `POST /search/bm25`
+- `POST /search/hybrid`
+- `POST /search/hybrid_rerank`
+
+## OpenAI config (Phase 5)
+
+Vector search depends on OpenAI embeddings. Set `OPENAI_API_KEY` (or `TICKERLENS_OPENAI_API_KEY`) before using:
+
+- `POST /documents/{doc_id}/embed`
+- `POST /search/vector`
+
+## Manual pipeline (Phases 2-6)
+
+The current implementation is intentionally manual-first: upload -> parse -> chunk -> index/embed -> search.
+
+1. Upload a PDF -> get `doc_id`
+2. `POST /documents/{doc_id}/parse`
+3. `POST /documents/{doc_id}/chunk`
+4. `POST /documents/{doc_id}/index`
+5. `POST /documents/{doc_id}/embed`
+6. `POST /search/vector` or `POST /search/bm25` or `POST /search/hybrid` or `POST /search/hybrid_rerank`

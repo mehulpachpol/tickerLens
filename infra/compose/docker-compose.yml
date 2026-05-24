@@ -52,7 +52,7 @@ services:
     restart: "no"
 
   qdrant:
-    image: qdrant/qdrant:v1.9.4
+    image: qdrant/qdrant:v1.18.0
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
@@ -108,6 +108,12 @@ services:
       TICKERLENS_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       TICKERLENS_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       TICKERLENS_S3_RAW_DOCS_BUCKET: ${MINIO_BUCKET_RAW_DOCS:-raw-docs}
+      TICKERLENS_OPENAI_RERANK_MODEL: ${TICKERLENS_OPENAI_RERANK_MODEL:-gpt-4o-mini}
+      TICKERLENS_OPENAI_RERANK_MAX_PASSAGE_CHARS: ${TICKERLENS_OPENAI_RERANK_MAX_PASSAGE_CHARS:-1200}
+      TICKERLENS_RERANK_BACKEND: ${TICKERLENS_RERANK_BACKEND:-fastembed}
+      TICKERLENS_FASTEMBED_RERANK_MODEL: ${TICKERLENS_FASTEMBED_RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
+      TICKERLENS_FASTEMBED_RERANK_BATCH_SIZE: ${TICKERLENS_FASTEMBED_RERANK_BATCH_SIZE:-32}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -123,6 +129,8 @@ services:
         condition: service_started
       opensearch:
         condition: service_started
+    volumes:
+      - fastembed_cache:/tmp/fastembed_cache
 
 volumes:
   postgres_data:
@@ -130,3 +138,4 @@ volumes:
   minio_data:
   qdrant_data:
   opensearch_data:
+  fastembed_cache:

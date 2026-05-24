@@ -28,3 +28,24 @@ Stock Intelligence RAG Platform (NSE multi‑ticker conversational financial int
    - `http://localhost:8000/health`
    - `http://localhost:8000/version`
 
+## OpenAI (Phase 5 embeddings/search)
+
+Set `OPENAI_API_KEY` in `infra/compose/.env` before running embedding or vector search endpoints.
+
+## OpenSearch (Phase 6 BM25/hybrid)
+
+Hybrid retrieval requires BM25 indexing in OpenSearch:
+
+- Index a document's chunks: `POST /documents/{doc_id}/index`
+- Search: `POST /search/bm25` or `POST /search/hybrid`
+
+## Reranking (Phase 7)
+
+- Reranked hybrid search: `POST /search/hybrid_rerank`
+- Default reranker is local cross-encoder (FastEmbed). Override via:
+  - env: `TICKERLENS_RERANK_BACKEND=openai|fastembed`
+  - request: set `rerank_backend` and/or `rerank_model`
+
+## Troubleshooting
+
+- If vector search errors with Qdrant 404s, ensure the Qdrant **server** version matches the `qdrant-client` version (we run `qdrant/qdrant:v1.18.0` in Compose).
