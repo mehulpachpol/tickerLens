@@ -9,7 +9,6 @@ Stock Intelligence RAG Platform (NSE multi‑ticker conversational financial int
 - Temporal correctness (“latest” means latest by filing date)
 - Auditable lineage from raw docs → parsing → chunks → indexes → answers
 
-The execution plan lives in `tasks.md`.
 
 ## Repo layout (current)
 
@@ -18,7 +17,6 @@ The execution plan lives in `tasks.md`.
 - `services/ingestion` — ingestion workers (planned)
 - `services/indexing` — chunking/embedding/indexing workers (planned)
 - `infra/compose` — local Docker services (Postgres/MinIO/Qdrant/OpenSearch/Redis)
-- `docs/adr` — local-only Architecture Decision Records (gitignored)
 
 ## Local dev (Docker)
 
@@ -30,7 +28,3 @@ The execution plan lives in `tasks.md`.
    - `http://localhost:8000/health`
    - `http://localhost:8000/version`
 
-## Why ADRs?
-
-This project has many “reasonable” choices (vector DB, chunking strategy, ingestion approach, schedulers, etc.).
-We capture decisions in `docs/adr/` so future changes are intentional and traceable.
