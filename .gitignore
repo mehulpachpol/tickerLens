@@ -16,6 +16,9 @@ out/
 .env
 **/.env
 
+# Local-only notes
+docs/adr/
+
 # OS / Editor
 .DS_Store
 Thumbs.db
@@ -24,4 +27,3 @@ Thumbs.db
 
 # Docker
 *.log
-

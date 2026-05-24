@@ -18,7 +18,7 @@ The execution plan lives in `tasks.md`.
 - `services/ingestion` — ingestion workers (planned)
 - `services/indexing` — chunking/embedding/indexing workers (planned)
 - `infra/compose` — local Docker services (Postgres/MinIO/Qdrant/OpenSearch/Redis)
-- `docs/adr` — Architecture Decision Records (why we choose things)
+- `docs/adr` — local-only Architecture Decision Records (gitignored)
 
 ## Local dev (Docker)
 
