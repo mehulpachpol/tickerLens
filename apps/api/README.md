@@ -25,3 +25,8 @@ In Docker Compose, a `migrate` service runs automatically before the API starts.
 - `POST /documents/upload`
 - `GET /documents/{doc_id}`
 - `GET /documents/{doc_id}/download`
+- `POST /documents/{doc_id}/parse`
+- `GET /documents/{doc_id}/parse-runs`
+- `GET /parse-runs/{run_id}`
+- `GET /documents/{doc_id}/pages`
+- `GET /documents/{doc_id}/pages/{page_num}`

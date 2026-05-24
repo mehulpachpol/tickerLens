@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 import boto3
 from botocore.config import Config
@@ -48,3 +49,12 @@ def presign_get_object(*, bucket: str, key: str, expires_in_seconds: int = 3600)
         ExpiresIn=expires_in_seconds,
     )
 
+
+def download_object_to_path(*, bucket: str, key: str, path: str) -> int:
+    client = get_s3_client()
+    with open(path, "wb") as f:
+        client.download_fileobj(bucket, key, f)
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0

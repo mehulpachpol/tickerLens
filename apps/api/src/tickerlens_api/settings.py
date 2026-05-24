@@ -22,5 +22,10 @@ class Settings(BaseSettings):
     s3_raw_docs_bucket: str = "raw-docs"
     s3_force_path_style: bool = True
 
+    # Parsing / OCR
+    parse_text_min_chars_for_digital: int = 40
+    ocr_language: str = "eng"
+    ocr_dpi: int = 200
+
 
 settings = Settings()
