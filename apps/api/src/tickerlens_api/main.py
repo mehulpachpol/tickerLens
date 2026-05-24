@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from tickerlens_api.api.routes.chunking import router as chunking_router
 from tickerlens_api.api.routes.documents import router as documents_router
 from tickerlens_api.api.routes.health import router as health_router
 from tickerlens_api.api.routes.parsing import router as parsing_router
@@ -13,6 +14,7 @@ def create_app() -> FastAPI:
     app.include_router(version_router)
     app.include_router(documents_router)
     app.include_router(parsing_router)
+    app.include_router(chunking_router)
     return app
 
 

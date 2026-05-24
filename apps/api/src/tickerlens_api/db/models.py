@@ -101,3 +101,66 @@ class DocumentPage(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class DocumentChunkRun(Base):
+    __tablename__ = "document_chunk_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    parse_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    chunker_version: Mapped[str] = mapped_column(String(50), nullable=False, default="linepack:v1")
+
+    max_chunk_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=5000)
+    overlap_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=250)
+    max_block_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=1200)
+
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    chunk_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    parse_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    chunk_run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    section: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
+    page_start: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    page_end: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DocumentChunkSpan(Base):
+    __tablename__ = "document_chunk_spans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    page_num: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

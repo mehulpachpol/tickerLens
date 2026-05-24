@@ -30,3 +30,8 @@ In Docker Compose, a `migrate` service runs automatically before the API starts.
 - `GET /parse-runs/{run_id}`
 - `GET /documents/{doc_id}/pages`
 - `GET /documents/{doc_id}/pages/{page_num}`
+- `POST /documents/{doc_id}/chunk`
+- `GET /documents/{doc_id}/chunk-runs`
+- `GET /chunk-runs/{run_id}`
+- `GET /documents/{doc_id}/chunks`
+- `GET /chunks/{chunk_id}`
