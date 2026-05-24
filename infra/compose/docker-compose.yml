@@ -112,11 +112,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      - postgres
-      - redis
-      - minio
-      - qdrant
-      - opensearch
+      postgres:
+        condition: service_healthy
+      minio_init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      opensearch:
+        condition: service_started
 
 volumes:
   postgres_data:
