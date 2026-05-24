@@ -5,7 +5,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY pyproject.toml README.md /app/
+COPY pyproject.toml README.md alembic.ini /app/
+COPY alembic/ /app/alembic/
 COPY src/ /app/src/
 
 RUN pip install --no-cache-dir -e .
