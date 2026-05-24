@@ -23,10 +23,10 @@ def upload(
     file: Annotated[UploadFile, File(..., description="PDF/HTML filing document")],
     ticker: Annotated[str, Form(..., description="NSE ticker symbol, e.g. INFY")],
     document_type: Annotated[str, Form(..., description="annual_report, concall, quarterly_results, ...")],
-    company_name: Annotated[str | None, Form(None)],
-    fiscal_year: Annotated[str | None, Form(None, description="e.g. FY24")],
-    filing_date: Annotated[str | None, Form(None, description="YYYY-MM-DD")],
-    source_url: Annotated[str | None, Form(None)],
+    company_name: Annotated[str | None, Form(description="Optional company name")] = None,
+    fiscal_year: Annotated[str | None, Form(description="e.g. FY24")] = None,
+    filing_date: Annotated[str | None, Form(description="YYYY-MM-DD")] = None,
+    source_url: Annotated[str | None, Form(description="Optional source URL")] = None,
     db: Session = Depends(get_db),
 ) -> UploadDocumentResponse:
     filing_date_parsed: dt.date | None = None
@@ -117,4 +117,3 @@ def download(doc_id: str, db: Session = Depends(get_db)) -> DownloadLinkResponse
     expires = 3600
     url = create_download_link(bucket=doc_file.bucket, key=doc_file.object_key, expires_in_seconds=expires)
     return DownloadLinkResponse(doc_id=doc_id, url=url, expires_in_seconds=expires)
-
