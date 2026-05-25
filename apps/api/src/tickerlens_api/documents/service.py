@@ -89,17 +89,61 @@ def upload_document(
     # 1) Spool file + checksum (read once)
     digest = spool_to_temp_and_hash(file.file)
 
-    # 2) Check for exact duplicate within same semantic identity (ticker + type + date + fiscal year).
+    try:
+        document, doc_file, deduped = ingest_document_from_tempfile_digest(
+            db,
+            temp_path=digest.path,
+            sha256=digest.sha256,
+            size_bytes=digest.size_bytes,
+            original_filename=file.filename,
+            content_type=file.content_type,
+            ticker=ticker_norm,
+            company_name=company_name_norm,
+            document_type=document_type_norm,
+            fiscal_year=fiscal_year_norm,
+            filing_date=filing_date,
+            source_url=source_url_norm,
+        )
+        return document, doc_file, deduped
+    finally:
+        try:
+            os.remove(digest.path)
+        except OSError:
+            pass
+
+
+def ingest_document_from_tempfile_digest(
+    db: Session,
+    *,
+    temp_path: str,
+    sha256: str,
+    size_bytes: int,
+    original_filename: str | None,
+    content_type: str | None,
+    ticker: str,
+    company_name: str | None,
+    document_type: str,
+    fiscal_year: str | None,
+    filing_date: dt.date | None,
+    source_url: str | None,
+) -> tuple[Document, DocumentFile, bool]:
+    """
+    Shared ingestion primitive (Phase 2 uploads, Phase 10 auto-ingestion).
+
+    Accepts a temp file path + checksum computed upstream. This avoids re-reading the file to hash it.
+    """
+
+    # 1) Check for exact duplicate within same semantic identity (ticker + type + date + fiscal year).
     stmt = (
         select(Document)
-        .where(Document.ticker == ticker_norm)
-        .where(Document.document_type == document_type_norm)
+        .where(Document.ticker == ticker)
+        .where(Document.document_type == document_type)
         .order_by(Document.version.desc())
     )
-    if fiscal_year_norm is None:
+    if fiscal_year is None:
         stmt = stmt.where(Document.fiscal_year.is_(None))
     else:
-        stmt = stmt.where(Document.fiscal_year == fiscal_year_norm)
+        stmt = stmt.where(Document.fiscal_year == fiscal_year)
     if filing_date is None:
         stmt = stmt.where(Document.filing_date.is_(None))
     else:
@@ -108,54 +152,43 @@ def upload_document(
     existing_docs = db.execute(stmt).scalars().all()
 
     for doc in existing_docs:
-        if doc.checksum == digest.sha256:
+        if doc.checksum == sha256:
             existing_file = db.execute(select(DocumentFile).where(DocumentFile.doc_id == doc.doc_id)).scalars().first()
-            if not existing_file:
-                break
-            try:
-                os.remove(digest.path)
-            except OSError:
-                pass
-            return doc, existing_file, True
+            if existing_file:
+                return doc, existing_file, True
 
     next_version = (existing_docs[0].version + 1) if existing_docs else 1
     doc_id = str(uuid.uuid4())
 
     object_key = build_raw_doc_object_key(
-        ticker=ticker_norm,
-        document_type=document_type_norm,
+        ticker=ticker,
+        document_type=document_type,
         filing_date=filing_date,
         doc_id=doc_id,
-        original_filename=file.filename,
+        original_filename=original_filename,
     )
 
-    # 3) Upload bytes to S3/MinIO
-    try:
-        with open(digest.path, "rb") as f:
-            put_object_fileobj(
-                bucket=settings.s3_raw_docs_bucket,
-                key=object_key,
-                fileobj=f,
-                content_type=file.content_type,
-            )
-    finally:
-        try:
-            os.remove(digest.path)
-        except OSError:
-            pass
+    # 2) Upload bytes to S3/MinIO
+    with open(temp_path, "rb") as f:
+        put_object_fileobj(
+            bucket=settings.s3_raw_docs_bucket,
+            key=object_key,
+            fileobj=f,
+            content_type=content_type,
+        )
 
-    # 4) Persist metadata
-    upsert_company(db, ticker=ticker_norm, company_name=company_name_norm)
+    # 3) Persist metadata
+    upsert_company(db, ticker=ticker, company_name=company_name)
 
     document = Document(
         doc_id=doc_id,
-        ticker=ticker_norm,
-        company_name=company_name_norm,
-        document_type=document_type_norm,
-        fiscal_year=fiscal_year_norm,
+        ticker=ticker,
+        company_name=company_name,
+        document_type=document_type,
+        fiscal_year=fiscal_year,
         filing_date=filing_date,
-        source_url=source_url_norm,
-        checksum=digest.sha256,
+        source_url=source_url,
+        checksum=sha256,
         version=next_version,
     )
     db.add(document)
@@ -164,9 +197,9 @@ def upload_document(
         doc_id=doc_id,
         bucket=settings.s3_raw_docs_bucket,
         object_key=object_key,
-        content_type=file.content_type,
-        size_bytes=digest.size_bytes,
-        checksum=digest.sha256,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        checksum=sha256,
     )
     db.add(doc_file)
 

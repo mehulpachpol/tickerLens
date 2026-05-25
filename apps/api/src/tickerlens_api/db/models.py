@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Date, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -209,6 +210,99 @@ class DocumentIndexRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     indexed_chunks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TickerUniverse(Base):
+    __tablename__ = "ticker_universes"
+
+    universe_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TickerUniverseMember(Base):
+    __tablename__ = "ticker_universe_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    universe_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    start_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class IngestionRun(Base):
+    __tablename__ = "ingestion_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    universe_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)  # discover|download|sync
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # queued|running|succeeded|failed
+
+    scheduled_for: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
+
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    discovered_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    downloaded_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ingested_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class IngestionDiscoveredItem(Base):
+    __tablename__ = "ingestion_discovered_items"
+
+    item_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    universe_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="nse")
+
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_type: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="discovered")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    first_seen_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    downloaded_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ingested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    doc_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

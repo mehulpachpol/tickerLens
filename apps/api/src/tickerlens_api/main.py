@@ -5,6 +5,7 @@ from tickerlens_api.api.routes.chat import router as chat_router
 from tickerlens_api.api.routes.documents import router as documents_router
 from tickerlens_api.api.routes.embeddings import router as embeddings_router
 from tickerlens_api.api.routes.health import router as health_router
+from tickerlens_api.api.routes.ingestion import router as ingestion_router
 from tickerlens_api.api.routes.indexing import router as indexing_router
 from tickerlens_api.api.routes.parsing import router as parsing_router
 from tickerlens_api.api.routes.pipeline import router as pipeline_router
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router)
     app.include_router(tickers_router)
     app.include_router(chat_router)
+    app.include_router(ingestion_router)
     return app
 
 

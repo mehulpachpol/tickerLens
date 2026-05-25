@@ -20,6 +20,7 @@ Implemented and working locally:
 - Next.js UI with streaming chat + citation panel + timeline viewer (port 3010)
 - Phase 9 (partial): "latest" temporal scoping for hybrid retrieval + incremental `/documents/{doc_id}/process` orchestrator
 - Timeline building blocks: `GET /tickers/{ticker}/documents` + `GET /documents/{doc_id}/versions`
+- Phase 10 (v1): daily NSE ingestion for `NIFTY_50` (discovery + download/dedupe + raw storage) + APScheduler service
 
 ## Architecture (local dev)
 
@@ -37,6 +38,8 @@ Postgres                    Qdrant                      OpenSearch
   |
   v
 MinIO (raw PDFs and artifacts)
+
+Ingestion scheduler (infra/compose: ingestion_scheduler) -> FastAPI DB/MinIO pipeline
 ```
 
 ## Repository layout
@@ -117,6 +120,26 @@ The UI uses a proxy to the backend:
   - `event: delta` - incremental answer text
   - `event: citations` - final citations payload (chunk_id -> doc/page metadata)
   - `event: done`
+
+### 4) Automated NSE ingestion (Phase 10 v1)
+
+This runs **daily** via the `ingestion_scheduler` compose service (APScheduler, IST timezone). It discovers NSE corporate announcement attachments and ingests raw PDFs into MinIO + `documents` in Postgres (dedupe + versioning).
+
+Key endpoints:
+
+1. Seed universe (idempotent):
+   - `POST /ingestion/universes/nifty50/seed`
+2. Discover attachments:
+   - `POST /ingestion/nse/discover`
+3. Download + ingest discovered items:
+   - `POST /ingestion/nse/ingest`
+4. Convenience (discover + ingest):
+   - `POST /ingestion/nse/sync`
+5. Ops views:
+   - `GET /ingestion/discovered`
+   - `GET /ingestion/runs`
+
+Config is in `infra/compose/.env` (see Phase 10 keys in `infra/compose/.env.example`).
 
 ## Roadmap
 

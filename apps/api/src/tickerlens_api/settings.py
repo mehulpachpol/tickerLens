@@ -64,5 +64,29 @@ class Settings(BaseSettings):
     opensearch_url: str = "http://opensearch:9200"
     opensearch_chunks_index_prefix: str = "tickerlens_chunks"
 
+    # ---------------------------------------------------------------------
+    # Phase 10: Automated NSE ingestion (scheduler + discovery/download)
+    # ---------------------------------------------------------------------
+    ingestion_enabled: bool = True
+    ingestion_universe_id: str = "NIFTY_50"
+    ingestion_lookback_days: int = 3  # scheduler queries [today-lookback, today]
+    ingestion_limit_per_ticker: int = 10
+
+    # Scheduler cadence (IST)
+    ingestion_scheduler_enabled: bool = True
+    ingestion_cron_hour_ist: int = 19
+    ingestion_cron_minute_ist: int = 0
+
+    # NSE endpoints
+    nse_base_url: str = "https://www.nseindia.com"
+    nse_index: str = "equities"
+    nse_timeout_s: int = 30
+    nse_throttle_ms: int = 250
+    nse_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+
 
 settings = Settings()
