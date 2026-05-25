@@ -185,5 +185,62 @@ def get_document_file(db: Session, *, doc_id: str) -> DocumentFile | None:
     return db.execute(select(DocumentFile).where(DocumentFile.doc_id == doc_id)).scalars().first()
 
 
+def list_documents_for_ticker(
+    db: Session,
+    *,
+    ticker: str,
+    document_types: list[str] | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Document]:
+    ticker_norm = normalize_ticker(ticker)
+    stmt = select(Document).where(Document.ticker == ticker_norm)
+    if document_types:
+        # document_type is normalized to lowercase in ingestion.
+        doc_types = [(_safe_token(x).lower()) for x in document_types if x]
+        if doc_types:
+            stmt = stmt.where(Document.document_type.in_(doc_types))
+    stmt = (
+        stmt.order_by(
+            Document.filing_date.desc().nulls_last(),
+            Document.version.desc(),
+            Document.created_at.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def list_document_versions(db: Session, *, doc_id: str, limit: int = 50) -> list[Document]:
+    """
+    Phase 9: retrieve the version chain for a document.
+
+    "Same document" identity = (ticker, document_type, fiscal_year, filing_date).
+    """
+
+    doc = get_document(db, doc_id=doc_id)
+    if not doc:
+        return []
+
+    stmt = (
+        select(Document)
+        .where(Document.ticker == doc.ticker)
+        .where(Document.document_type == doc.document_type)
+    )
+    if doc.fiscal_year is None:
+        stmt = stmt.where(Document.fiscal_year.is_(None))
+    else:
+        stmt = stmt.where(Document.fiscal_year == doc.fiscal_year)
+
+    if doc.filing_date is None:
+        stmt = stmt.where(Document.filing_date.is_(None))
+    else:
+        stmt = stmt.where(Document.filing_date == doc.filing_date)
+
+    stmt = stmt.order_by(Document.version.desc(), Document.created_at.desc()).limit(limit)
+    return list(db.execute(stmt).scalars().all())
+
+
 def create_download_link(*, bucket: str, key: str, expires_in_seconds: int = 3600) -> str:
     return presign_get_object(bucket=bucket, key=key, expires_in_seconds=expires_in_seconds)

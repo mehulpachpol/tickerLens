@@ -51,6 +51,29 @@ def list_index_runs(db: Session, *, doc_id: str, limit: int = 20) -> list[Docume
     return list(db.execute(stmt).scalars().all())
 
 
+def get_latest_successful_index_run_for_chunk(
+    db: Session,
+    *,
+    doc_id: str,
+    parse_run_id: str,
+    chunk_run_id: str,
+    backend: str,
+    index_name: str,
+) -> DocumentIndexRun | None:
+    stmt = (
+        select(DocumentIndexRun)
+        .where(DocumentIndexRun.doc_id == doc_id)
+        .where(DocumentIndexRun.parse_run_id == parse_run_id)
+        .where(DocumentIndexRun.chunk_run_id == chunk_run_id)
+        .where(DocumentIndexRun.backend == backend)
+        .where(DocumentIndexRun.index_name == index_name)
+        .where(DocumentIndexRun.status == "succeeded")
+        .order_by(DocumentIndexRun.finished_at.desc().nullslast(), DocumentIndexRun.created_at.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def _get_doc(db: Session, *, doc_id: str) -> Document | None:
     return db.get(Document, doc_id)
 
@@ -173,4 +196,3 @@ def run_index_job(*, run_id: str) -> None:
             db.commit()
     finally:
         db.close()
-

@@ -38,3 +38,17 @@ class DownloadLinkResponse(BaseModel):
     url: str
     expires_in_seconds: int
 
+
+class DocumentListItem(BaseModel):
+    doc_id: str
+    ticker: str
+    company_name: str | None
+    document_type: str
+    fiscal_year: str | None
+    filing_date: dt.date | None
+    source_url: str | None
+    checksum: str
+    version: int
+    created_at: dt.datetime
+    updated_at: dt.datetime
+

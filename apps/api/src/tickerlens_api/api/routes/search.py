@@ -28,6 +28,8 @@ from tickerlens_api.search.schemas import (
 )
 from tickerlens_api.settings import settings
 from tickerlens_api.vectorstore.qdrant_store import ensure_collection, search as qdrant_search
+from tickerlens_api.temporal.intent import detect_temporal_intent, infer_document_type_preferences
+from tickerlens_api.temporal.scope import resolve_latest_doc_scope
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -144,13 +146,28 @@ def bm25_search(req: BM25SearchRequest) -> BM25SearchResponse:
 
 
 @router.post("/hybrid", response_model=HybridSearchResponse)
-def hybrid_search(req: HybridSearchRequest) -> HybridSearchResponse:
+def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> HybridSearchResponse:
     # Hybrid search needs both OpenSearch (BM25) and Qdrant (vector).
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=422,
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
+
+    # Phase 9 temporal scoping: if the query asks for "latest", restrict to latest relevant docs (unless doc_ids explicitly provided).
+    effective_doc_ids = req.doc_ids
+    if effective_doc_ids is None and req.tickers:
+        intent = detect_temporal_intent(question=req.query)
+        if intent.mode == "latest":
+            prefs = infer_document_type_preferences(question=req.query)
+            scope = resolve_latest_doc_scope(
+                db,
+                tickers=req.tickers,
+                preferred_document_types=prefs.document_types,
+                reason=f"{intent.reason};{prefs.reason}",
+            )
+            if scope.doc_ids:
+                effective_doc_ids = scope.doc_ids
 
     # Vector side
     try:
@@ -166,8 +183,8 @@ def hybrid_search(req: HybridSearchRequest) -> HybridSearchResponse:
     must: list[qmodels.FieldCondition] = []
     if req.tickers:
         must.append(qmodels.FieldCondition(key="ticker", match=qmodels.MatchAny(any=req.tickers)))
-    if req.doc_ids:
-        must.append(qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=req.doc_ids)))
+    if effective_doc_ids:
+        must.append(qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=effective_doc_ids)))
     if req.chunk_run_id:
         must.append(qmodels.FieldCondition(key="chunk_run_id", match=qmodels.MatchValue(value=req.chunk_run_id)))
     query_filter = qmodels.Filter(must=must) if must else None
@@ -191,8 +208,8 @@ def hybrid_search(req: HybridSearchRequest) -> HybridSearchResponse:
     os_filters: list[dict] = []
     if req.tickers:
         os_filters.append({"terms": {"ticker": req.tickers}})
-    if req.doc_ids:
-        os_filters.append({"terms": {"doc_id": req.doc_ids}})
+    if effective_doc_ids:
+        os_filters.append({"terms": {"doc_id": effective_doc_ids}})
     if req.chunk_run_id:
         os_filters.append({"term": {"chunk_run_id": req.chunk_run_id}})
 
@@ -330,6 +347,21 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
 
+    # Phase 9 temporal scoping (same behavior as /search/hybrid).
+    effective_doc_ids = req.doc_ids
+    if effective_doc_ids is None and req.tickers:
+        intent = detect_temporal_intent(question=req.query)
+        if intent.mode == "latest":
+            prefs = infer_document_type_preferences(question=req.query)
+            scope = resolve_latest_doc_scope(
+                db,
+                tickers=req.tickers,
+                preferred_document_types=prefs.document_types,
+                reason=f"{intent.reason};{prefs.reason}",
+            )
+            if scope.doc_ids:
+                effective_doc_ids = scope.doc_ids
+
     # Vector side
     try:
         model, dims, vector_size, collection = compute_embedding_target(
@@ -347,8 +379,8 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
     must: list[qmodels.FieldCondition] = []
     if req.tickers:
         must.append(qmodels.FieldCondition(key="ticker", match=qmodels.MatchAny(any=req.tickers)))
-    if req.doc_ids:
-        must.append(qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=req.doc_ids)))
+    if effective_doc_ids:
+        must.append(qmodels.FieldCondition(key="doc_id", match=qmodels.MatchAny(any=effective_doc_ids)))
     if req.chunk_run_id:
         must.append(qmodels.FieldCondition(key="chunk_run_id", match=qmodels.MatchValue(value=req.chunk_run_id)))
     query_filter = qmodels.Filter(must=must) if must else None
@@ -374,8 +406,8 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
     os_filters: list[dict] = []
     if req.tickers:
         os_filters.append({"terms": {"ticker": req.tickers}})
-    if req.doc_ids:
-        os_filters.append({"terms": {"doc_id": req.doc_ids}})
+    if effective_doc_ids:
+        os_filters.append({"terms": {"doc_id": effective_doc_ids}})
     if req.chunk_run_id:
         os_filters.append({"term": {"chunk_run_id": req.chunk_run_id}})
 

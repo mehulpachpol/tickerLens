@@ -63,6 +63,31 @@ def list_embedding_runs(db: Session, *, doc_id: str, limit: int = 20) -> list[Do
     return list(db.execute(stmt).scalars().all())
 
 
+def get_latest_successful_embedding_run_for_chunk(
+    db: Session,
+    *,
+    doc_id: str,
+    parse_run_id: str,
+    chunk_run_id: str,
+    embedding_model: str,
+    dimensions: int | None,
+    qdrant_collection: str,
+) -> DocumentEmbeddingRun | None:
+    stmt = (
+        select(DocumentEmbeddingRun)
+        .where(DocumentEmbeddingRun.doc_id == doc_id)
+        .where(DocumentEmbeddingRun.parse_run_id == parse_run_id)
+        .where(DocumentEmbeddingRun.chunk_run_id == chunk_run_id)
+        .where(DocumentEmbeddingRun.embedding_model == embedding_model)
+        .where(DocumentEmbeddingRun.dimensions == dimensions)
+        .where(DocumentEmbeddingRun.qdrant_collection == qdrant_collection)
+        .where(DocumentEmbeddingRun.status == "succeeded")
+        .order_by(DocumentEmbeddingRun.finished_at.desc().nullslast(), DocumentEmbeddingRun.created_at.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def _get_doc(db: Session, *, doc_id: str) -> Document | None:
     return db.get(Document, doc_id)
 

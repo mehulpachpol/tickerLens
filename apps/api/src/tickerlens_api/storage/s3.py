@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from urllib.parse import urlparse, urlunparse
 
 import boto3
 from botocore.config import Config
@@ -43,11 +44,23 @@ def put_object_fileobj(*, bucket: str, key: str, fileobj, content_type: str | No
 
 def presign_get_object(*, bucket: str, key: str, expires_in_seconds: int = 3600) -> str:
     client = get_s3_client()
-    return client.generate_presigned_url(
+    url = client.generate_presigned_url(
         ClientMethod="get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expires_in_seconds,
     )
+    public = settings.s3_public_endpoint_url
+    if not public:
+        return url
+
+    try:
+        u = urlparse(url)
+        p = urlparse(public)
+        if not p.scheme or not p.netloc:
+            return url
+        return urlunparse((p.scheme, p.netloc, u.path, u.params, u.query, u.fragment))
+    except Exception:
+        return url
 
 
 def download_object_to_path(*, bucket: str, key: str, path: str) -> int:

@@ -78,6 +78,29 @@ def get_latest_successful_chunk_run(db: Session, *, doc_id: str) -> DocumentChun
     return db.execute(stmt).scalars().first()
 
 
+def get_latest_successful_chunk_run_for_parse(
+    db: Session,
+    *,
+    doc_id: str,
+    parse_run_id: str,
+    max_chunk_chars: int,
+    overlap_chars: int,
+    max_block_chars: int,
+) -> DocumentChunkRun | None:
+    stmt = (
+        select(DocumentChunkRun)
+        .where(DocumentChunkRun.doc_id == doc_id)
+        .where(DocumentChunkRun.parse_run_id == parse_run_id)
+        .where(DocumentChunkRun.status == "succeeded")
+        .where(DocumentChunkRun.max_chunk_chars == max_chunk_chars)
+        .where(DocumentChunkRun.overlap_chars == overlap_chars)
+        .where(DocumentChunkRun.max_block_chars == max_block_chars)
+        .order_by(DocumentChunkRun.finished_at.desc().nullslast(), DocumentChunkRun.created_at.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def list_chunks(db: Session, *, doc_id: str, chunk_run_id: str) -> list[DocumentChunk]:
     stmt = (
         select(DocumentChunk)

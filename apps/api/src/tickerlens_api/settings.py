@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     # Object storage (MinIO / S3-compatible)
     s3_endpoint_url: str = "http://minio:9000"
+    # Public URL used in responses (e.g., presigned download links). Useful when the API runs
+    # inside Docker and the client is outside (host browser can't resolve "minio").
+    # Example: "http://localhost:9000"
+    s3_public_endpoint_url: str | None = None
     s3_access_key_id: str = "minioadmin"
     s3_secret_access_key: str = "minioadmin123"
     s3_region_name: str = "us-east-1"
@@ -36,6 +40,11 @@ class Settings(BaseSettings):
     )
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int | None = None
+
+    # OpenAI chat generation (Phase 8)
+    openai_chat_model: str = "gpt-4o-mini"
+    openai_chat_temperature: float = 0.2
+    openai_chat_max_tokens: int = 900
 
     # OpenAI reranking (Phase 7)
     openai_rerank_model: str = "gpt-4o-mini"

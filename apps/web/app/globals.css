@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 0 0% 6%;
+  --panel: 0 0% 10%;
+  --text: 210 40% 98%;
+  --muted: 0 0% 65%;
+  --border: 0 0% 16%;
+  --primary: 160 84% 39%;
+  --primary-fg: 210 40% 98%;
+  --danger: 0 84% 60%;
+  --danger-fg: 210 40% 98%;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: hsl(var(--bg));
+  color: hsl(var(--text));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.25);
+}
+
+/* Hide scrollbars (ChatGPT-like); still scrollable. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
