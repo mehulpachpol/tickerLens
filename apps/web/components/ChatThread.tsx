@@ -5,9 +5,25 @@ import { Quote, TriangleAlert } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 
 const INLINE_CITATION_RE = /\[\(chunk_id=[^)]+\)\]/g;
+const INLINE_CITATION_PREFIX = "[(chunk_id=";
 
 function stripInlineCitations(text: string) {
-  return (text || "").replace(INLINE_CITATION_RE, "").replace(/[ \t]+\n/g, "\n").trim();
+  let s = (text || "").replace(INLINE_CITATION_RE, "");
+
+  // During streaming we can see partial tokens like "[(chunk_id=" before the closing ")]" arrives.
+  // Hide the entire citation marker as soon as it starts, so it never flashes in the UI.
+  while (true) {
+    const i = s.indexOf(INLINE_CITATION_PREFIX);
+    if (i === -1) break;
+    const j = s.indexOf(")]", i);
+    if (j === -1) {
+      s = s.slice(0, i);
+      break;
+    }
+    s = s.slice(0, i) + s.slice(j + 2);
+  }
+
+  return s.replace(/[ \t]+\n/g, "\n").trim();
 }
 
 function formatTime(ts: number) {
@@ -16,6 +32,16 @@ function formatTime(ts: number) {
   } catch {
     return "";
   }
+}
+
+function TypingDots() {
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <span className="h-1.5 w-1.5 rounded-full bg-muted/70 animate-bounce [animation-delay:-0.2s]" />
+      <span className="h-1.5 w-1.5 rounded-full bg-muted/70 animate-bounce [animation-delay:-0.1s]" />
+      <span className="h-1.5 w-1.5 rounded-full bg-muted/70 animate-bounce" />
+    </div>
+  );
 }
 
 export function ChatThread({
@@ -35,6 +61,7 @@ export function ChatThread({
         const citationsCount = m.citations?.citations?.length ?? 0;
         const isActive = activeCitationsMessageId === m.id;
         const display = isUser ? m.content : stripInlineCitations(m.content);
+        const showLoader = !isUser && isStreaming && !display.trim() && !m.error;
 
         return (
           <div
@@ -52,7 +79,12 @@ export function ChatThread({
               ].join(" ")}
             >
               <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                {display || (!isUser && isStreaming) ? (
+                {showLoader ? (
+                  <div className="flex items-center gap-2 text-muted">
+                    <TypingDots />
+                    <span className="text-xs">Thinking...</span>
+                  </div>
+                ) : display || (!isUser && isStreaming) ? (
                   <>
                     {display}
                     {!isUser && isStreaming ? <span className="ml-0.5 animate-pulse">▍</span> : null}

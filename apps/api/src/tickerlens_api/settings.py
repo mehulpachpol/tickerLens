@@ -88,5 +88,33 @@ class Settings(BaseSettings):
         "Chrome/124.0.0.0 Safari/537.36"
     )
 
+    # ---------------------------------------------------------------------
+    # Phase 11: Auth + sessions
+    # ---------------------------------------------------------------------
+    auth_enabled: bool = False
+    auth_allow_register: bool = False
+
+    auth_bootstrap_admin_email: str | None = None
+    auth_bootstrap_admin_password: str | None = None
+
+    auth_session_cookie_name: str = "tickerlens_session"
+    auth_session_ttl_hours: int = 24 * 7
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"  # "lax"|"strict"|"none"
+    auth_cookie_domain: str | None = None
+
+    # ---------------------------------------------------------------------
+    # Phase 11: Observability
+    # ---------------------------------------------------------------------
+    metrics_enabled: bool = True
+    metrics_path: str = "/metrics"
+
+    otel_enabled: bool = False
+    otel_service_name: str = "tickerlens-api"
+    otel_otlp_endpoint: str | None = None  # e.g. http://otel-collector:4318
+
+    # Rate limiting (Phase 11)
+    redis_url: str = "redis://redis:6379/0"
+
 
 settings = Settings()

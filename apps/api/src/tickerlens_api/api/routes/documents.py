@@ -3,9 +3,11 @@ from __future__ import annotations
 import datetime as dt
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled, require_user_if_auth_enabled
+from tickerlens_api.audit.service import log_audit
 from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.schemas import DocumentListItem, DownloadLinkResponse, UploadDocumentResponse
 from tickerlens_api.documents.service import (
@@ -16,11 +18,12 @@ from tickerlens_api.documents.service import (
     upload_document,
 )
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 @router.post("/upload", response_model=UploadDocumentResponse)
 def upload(
+    request: Request,
     file: Annotated[UploadFile, File(..., description="PDF/HTML filing document")],
     ticker: Annotated[str, Form(..., description="NSE ticker symbol, e.g. INFY")],
     document_type: Annotated[str, Form(..., description="annual_report, concall, quarterly_results, ...")],
@@ -29,6 +32,7 @@ def upload(
     filing_date: Annotated[str | None, Form(description="YYYY-MM-DD")] = None,
     source_url: Annotated[str | None, Form(description="Optional source URL")] = None,
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin_if_auth_enabled),
 ) -> UploadDocumentResponse:
     filing_date_parsed: dt.date | None = None
     if filing_date:
@@ -50,6 +54,15 @@ def upload(
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+    log_audit(
+        db,
+        action="documents.upload",
+        request=request,
+        user_id=getattr(request.state, "user_id", None),
+        status_code=200,
+        details={"ticker": ticker, "document_type": document_type, "deduplicated": deduped},
+    )
 
     return UploadDocumentResponse(
         document={

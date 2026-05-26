@@ -1,6 +1,7 @@
 import { ChatApp } from "@/components/ChatApp";
+import { requireSignedIn } from "@/lib/serverAuth";
 
-export default function Page() {
+export default async function Page() {
+  await requireSignedIn("/");
   return <ChatApp />;
 }
-

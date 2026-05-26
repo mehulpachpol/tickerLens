@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled
+from tickerlens_api.audit.service import log_audit
 from tickerlens_api.db.models import IngestionDiscoveredItem, IngestionRun
 from tickerlens_api.db.session import get_db
 from tickerlens_api.ingestion.runner import run_nse_discovery, run_nse_ingest_pending, run_nse_sync
@@ -14,7 +16,7 @@ from tickerlens_api.ingestion.universe_service import list_active_universe_ticke
 from tickerlens_api.settings import settings
 
 
-router = APIRouter(prefix="/ingestion", tags=["ingestion"])
+router = APIRouter(prefix="/ingestion", tags=["ingestion"], dependencies=[Depends(require_admin_if_auth_enabled)])
 
 
 class SeedUniverseResponse(BaseModel):
@@ -82,18 +84,19 @@ class IngestionRunOut(BaseModel):
 
 
 @router.post("/universes/nifty50/seed", response_model=SeedUniverseResponse)
-def seed_universe_nifty50(db: Session = Depends(get_db)) -> SeedUniverseResponse:
+def seed_universe_nifty50(request: Request, db: Session = Depends(get_db)) -> SeedUniverseResponse:
     """
     Phase 10: bootstrap the NIFTY_50 universe (idempotent).
     """
 
     seed_nifty50(db)
     tickers = list_active_universe_tickers(db, universe_id="NIFTY_50")
+    log_audit(db, action="ingestion.seed_nifty50", request=request, user_id=getattr(request.state, "user_id", None), status_code=200)
     return SeedUniverseResponse(universe_id="NIFTY_50", members=len(tickers))
 
 
 @router.post("/nse/discover")
-def nse_discover(req: NseDiscoveryRequest, db: Session = Depends(get_db)) -> dict:
+def nse_discover(req: NseDiscoveryRequest, request: Request, db: Session = Depends(get_db)) -> dict:
     """
     Phase 10: discover NSE corporate announcement attachments into `ingestion_discovered_items`.
     """
@@ -106,11 +109,19 @@ def nse_discover(req: NseDiscoveryRequest, db: Session = Depends(get_db)) -> dic
         to_date=req.to_date,
         lookback_days=req.lookback_days,
     )
+    log_audit(
+        db,
+        action="ingestion.nse_discover",
+        request=request,
+        user_id=getattr(request.state, "user_id", None),
+        status_code=200,
+        details={"universe_id": req.universe_id, "tickers": req.tickers, "lookback_days": req.lookback_days},
+    )
     return {"universe_id": req.universe_id, "results": results}
 
 
 @router.post("/nse/ingest")
-def nse_ingest(req: NseIngestRequest, db: Session = Depends(get_db)) -> dict:
+def nse_ingest(req: NseIngestRequest, request: Request, db: Session = Depends(get_db)) -> dict:
     """
     Phase 10: download + dedupe + store raw docs in MinIO for discovered items (per ticker).
     """
@@ -121,16 +132,24 @@ def nse_ingest(req: NseIngestRequest, db: Session = Depends(get_db)) -> dict:
         tickers=req.tickers,
         limit_per_ticker=req.limit_per_ticker,
     )
+    log_audit(
+        db,
+        action="ingestion.nse_ingest",
+        request=request,
+        user_id=getattr(request.state, "user_id", None),
+        status_code=200,
+        details={"universe_id": req.universe_id, "tickers": req.tickers, "limit_per_ticker": req.limit_per_ticker},
+    )
     return {"universe_id": req.universe_id, "results": results}
 
 
 @router.post("/nse/sync")
-def nse_sync(req: NseSyncRequest, db: Session = Depends(get_db)) -> dict:
+def nse_sync(req: NseSyncRequest, request: Request, db: Session = Depends(get_db)) -> dict:
     """
     Phase 10: convenience endpoint (discover + ingest pending).
     """
 
-    return run_nse_sync(
+    result = run_nse_sync(
         db,
         universe_id=req.universe_id,
         tickers=req.tickers,
@@ -139,6 +158,15 @@ def nse_sync(req: NseSyncRequest, db: Session = Depends(get_db)) -> dict:
         lookback_days=req.lookback_days,
         limit_per_ticker=req.limit_per_ticker,
     )
+    log_audit(
+        db,
+        action="ingestion.nse_sync",
+        request=request,
+        user_id=getattr(request.state, "user_id", None),
+        status_code=200,
+        details={"universe_id": req.universe_id, "tickers": req.tickers, "lookback_days": req.lookback_days},
+    )
+    return result
 
 
 @router.get("/discovered", response_model=list[DiscoveredItemOut])

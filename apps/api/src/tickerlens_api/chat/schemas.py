@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class ChatStreamRequest(BaseModel):
     question: str = Field(min_length=1, description="User question in natural language.")
     tickers: list[str] | None = Field(default=None, description="Restrict retrieval to these tickers.")
+    conversation_id: str | None = Field(default=None, description="Optional existing conversation id (Phase 11).")
 
     # Retrieval parameters (Phase 7)
     top_k: int = Field(default=10, ge=1, le=50)
@@ -52,4 +53,3 @@ class Citation(BaseModel):
 class ChatCitationsPayload(BaseModel):
     used_chunk_ids: list[str]
     citations: list[Citation]
-

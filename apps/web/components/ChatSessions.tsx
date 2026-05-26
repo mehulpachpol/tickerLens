@@ -2,11 +2,11 @@
 
 import { MessageSquarePlus, Trash2 } from "lucide-react";
 
-import type { ChatSession } from "@/lib/types";
+import type { Conversation } from "@/lib/types";
 
-function formatDate(ts: number) {
+function formatDate(iso: string) {
   try {
-    return new Date(ts).toLocaleDateString([], { month: "short", day: "2-digit" });
+    return new Date(iso).toLocaleDateString([], { month: "short", day: "2-digit" });
   } catch {
     return "";
   }
@@ -20,7 +20,7 @@ export function ChatSessions({
   onDelete,
   showHeader = true,
 }: {
-  sessions: ChatSession[];
+  sessions: Conversation[];
   activeId: string | null;
   onNew: () => void;
   onSelect: (id: string) => void;
@@ -33,7 +33,7 @@ export function ChatSessions({
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-xs font-semibold tracking-wide text-text">Chats</div>
-            <div className="text-[11px] text-muted">Stored locally in this browser</div>
+            <div className="text-[11px] text-muted">Synced to your account</div>
           </div>
           <button
             type="button"
@@ -52,9 +52,10 @@ export function ChatSessions({
       ) : (
         <ul className={showHeader ? "mt-3 space-y-2" : "space-y-2"}>
           {sessions.map((s) => {
-            const isActive = s.id === activeId;
+            const id = s.conversation_id;
+            const isActive = id === activeId;
             return (
-              <li key={s.id}>
+              <li key={id}>
                 <div
                   className={[
                     "group flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition",
@@ -65,19 +66,19 @@ export function ChatSessions({
                 >
                   <button
                     type="button"
-                    onClick={() => onSelect(s.id)}
+                    onClick={() => onSelect(id)}
                     className="min-w-0 flex-1 text-left"
                   >
-                    <div className="truncate text-sm font-medium text-text">{s.title}</div>
+                    <div className="truncate text-sm font-medium text-text">{s.title ?? "New chat"}</div>
                     <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted">
-                      <span>{formatDate(s.createdAt)}</span>
+                      <span>{formatDate(s.created_at)}</span>
                       <span>•</span>
                       <span className="truncate">{s.tickers.join(", ") || "No tickers"}</span>
                     </div>
                   </button>
                   <button
                     type="button"
-                    onClick={() => onDelete(s.id)}
+                    onClick={() => onDelete(id)}
                     className="rounded-md p-2 text-muted opacity-0 transition hover:bg-bg/35 hover:text-text group-hover:opacity-100"
                     title="Delete chat"
                   >

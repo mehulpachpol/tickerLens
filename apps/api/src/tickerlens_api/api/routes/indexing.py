@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled
 from tickerlens_api.chunking.service import get_chunk_run, get_latest_successful_chunk_run
 from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.service import get_document
@@ -15,7 +16,7 @@ from tickerlens_api.indexing.service import (
     run_index_job,
 )
 
-router = APIRouter(tags=["indexing"])
+router = APIRouter(tags=["indexing"], dependencies=[Depends(require_admin_if_auth_enabled)])
 
 
 @router.post("/documents/{doc_id}/index", response_model=IndexRunOut)
@@ -75,4 +76,3 @@ def run_detail(run_id: str, db: Session = Depends(get_db)) -> IndexRunOut:
     if not run:
         raise HTTPException(status_code=404, detail="Index run not found")
     return IndexRunOut.model_validate(run, from_attributes=True)
-

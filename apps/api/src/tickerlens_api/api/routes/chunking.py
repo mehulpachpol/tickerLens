@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled
 from tickerlens_api.chunking.schemas import ChunkOut, ChunkPreviewOut, ChunkRunOut, ChunkSpanOut
 from tickerlens_api.chunking.service import (
     create_chunk_run,
@@ -18,7 +19,7 @@ from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.service import get_document
 from tickerlens_api.parsing.service import get_latest_successful_run
 
-router = APIRouter(tags=["chunking"])
+router = APIRouter(tags=["chunking"], dependencies=[Depends(require_admin_if_auth_enabled)])
 
 
 @router.post("/documents/{doc_id}/chunk", response_model=ChunkRunOut)
@@ -127,4 +128,3 @@ def chunk_detail(chunk_id: str, db: Session = Depends(get_db)) -> ChunkOut:
             ChunkSpanOut(page_num=s.page_num, char_start=s.char_start, char_end=s.char_end) for s in spans
         ],
     )
-

@@ -27,16 +27,32 @@ export type ChatMessage = {
   status?: "streaming" | "done" | "stopped";
 };
 
-export type ChatSession = {
-  id: string;
-  title: string;
-  createdAt: number;
+export type Conversation = {
+  conversation_id: string;
+  title?: string | null;
   tickers: string[];
-  messages: ChatMessage[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type RagRun = {
+  run_id: string;
+  conversation_id: string;
+  question: string;
+  answer?: string | null;
+  created_at: string;
+
+  tickers?: string[] | null;
+  doc_ids?: string[] | null;
+
+  retrieval?: Record<string, any> | null;
+  citations?: ChatCitationsPayload | null;
+  timings_ms?: Record<string, any> | null;
+  models?: Record<string, any> | null;
 };
 
 export type SseEvent =
-  | { event: "meta"; data: { retrieval_ms?: number; candidates?: number } }
+  | { event: "meta"; data: Record<string, any> }
   | { event: "delta"; data: { delta: string } }
   | { event: "citations"; data: ChatCitationsPayload }
   | { event: "done"; data: { ok: true } }

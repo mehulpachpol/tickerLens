@@ -21,6 +21,7 @@ Implemented and working locally:
 - Phase 9 (partial): "latest" temporal scoping for hybrid retrieval + incremental `/documents/{doc_id}/process` orchestrator
 - Timeline building blocks: `GET /tickers/{ticker}/documents` + `GET /documents/{doc_id}/versions`
 - Phase 10 (v1): daily NSE ingestion for `NIFTY_50` (discovery + download/dedupe + raw storage) + APScheduler service
+- Phase 11 (v1): optional session auth (cookie) + RBAC, per-user conversation + RAG run persistence, Prometheus metrics endpoint
 
 ## Architecture (local dev)
 
@@ -95,7 +96,21 @@ Edit `infra/compose/.env` (never commit secrets).
 The UI uses a proxy to the backend:
 
 - `POST /api/chat/stream` -> FastAPI `POST /chat/stream` (SSE)
-- `GET /api/documents/:docId/download` -> FastAPI `GET /documents/:docId/download`
+  - `GET /api/documents/:docId/download` -> FastAPI `GET /documents/:docId/download`
+
+### Phase 11: auth (optional)
+
+Auth is recommended for any real usage. It’s enabled in `infra/compose/.env.example`; configure in `infra/compose/.env` (and restart the API):
+
+- `TICKERLENS_AUTH_ENABLED=true`
+- `TICKERLENS_AUTH_ALLOW_REGISTER=true` (dev convenience; disable in production if needed)
+- `TICKERLENS_AUTH_BOOTSTRAP_ADMIN_EMAIL=admin@local`
+- `TICKERLENS_AUTH_BOOTSTRAP_ADMIN_PASSWORD=...`
+
+When auth is enabled:
+- `/search/*`, `/tickers/*`, `/documents/*` require an authenticated user
+- ingestion + processing endpoints require `role=admin`
+- `/conversations/*` is used for user chat history and RAG run inspection
 
 ## Core workflows
 

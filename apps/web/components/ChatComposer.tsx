@@ -84,7 +84,6 @@ export function ChatComposer({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={disabled ? "Add tickers to start..." : "Message TickerLens..."}
-          disabled={disabled}
           rows={1}
           className="no-scrollbar max-h-44 w-full resize-none overflow-y-auto bg-transparent px-1.5 py-2 text-sm leading-relaxed text-text placeholder:text-muted outline-none disabled:opacity-70 [scrollbar-gutter:stable]"
         />
@@ -103,7 +102,7 @@ export function ChatComposer({
           <button
             type="button"
             onClick={onSend}
-            disabled={disabled || !value.trim()}
+            disabled={!value.trim()}
             className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border/70 bg-bg/20 text-text hover:bg-bg/30 transition disabled:opacity-50"
             title="Send"
             aria-label="Send"

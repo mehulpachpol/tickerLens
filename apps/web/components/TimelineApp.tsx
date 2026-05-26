@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CalendarDays, ExternalLink, Filter, RefreshCw, Sparkles, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -52,8 +53,12 @@ function fmtTime(d?: string | null) {
 }
 
 export function TimelineApp() {
+  const router = useRouter();
   const [tickers, setTickers] = useState<string[]>([]);
   const [isTickerPickerOpen, setIsTickerPickerOpen] = useState(false);
+
+  const [authStatus, setAuthStatus] = useState<"unknown" | "disabled" | "authed" | "unauthed">("unknown");
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const [docTypeFilter, setDocTypeFilter] = useState<string[]>([]);
   const [docsByTicker, setDocsByTicker] = useState<Record<string, DocumentListItem[]>>({});
@@ -67,6 +72,37 @@ export function TimelineApp() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { method: "GET", headers: { Accept: "application/json" } });
+        if (cancelled) return;
+        if (res.status === 200) {
+          const data = (await res.json()) as { user?: { email?: string } };
+          setAuthStatus("authed");
+          setUserEmail(data.user?.email ?? null);
+          return;
+        }
+        if (res.status === 400) {
+          setAuthStatus("disabled");
+          return;
+        }
+        if (res.status === 401) {
+          setAuthStatus("unauthed");
+          router.replace(`/login?next=${encodeURIComponent("/timeline")}`);
+          return;
+        }
+        setAuthStatus("disabled");
+      } catch {
+        setAuthStatus("disabled");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
@@ -225,6 +261,29 @@ export function TimelineApp() {
           >
             Chat
           </Link>
+
+          {authStatus === "authed" ? (
+            <>
+              <span className="hidden max-w-[240px] truncate text-xs text-muted md:inline">
+                {userEmail ?? "Signed in"}
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await fetch("/api/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
+                  } finally {
+                    router.replace("/login?next=%2Ftimeline");
+                  }
+                }}
+                className="rounded-xl border border-border/70 bg-panel/50 px-3 py-2 text-sm font-semibold text-text hover:bg-panel/70 transition"
+                title="Sign out"
+              >
+                Logout
+              </button>
+            </>
+          ) : null}
+
           <button
             type="button"
             onClick={() => setIsTickerPickerOpen(true)}
@@ -557,4 +616,3 @@ export function TimelineApp() {
     </div>
   );
 }
-

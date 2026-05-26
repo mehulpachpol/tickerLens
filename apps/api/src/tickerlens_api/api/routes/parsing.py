@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled
 from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.service import get_document
 from tickerlens_api.parsing.schemas import PageOut, PagePreviewOut, ParseRunOut
@@ -16,7 +17,7 @@ from tickerlens_api.parsing.service import (
     run_parse_job,
 )
 
-router = APIRouter(tags=["parsing"])
+router = APIRouter(tags=["parsing"], dependencies=[Depends(require_admin_if_auth_enabled)])
 
 
 @router.post("/documents/{doc_id}/parse", response_model=ParseRunOut)
@@ -107,4 +108,3 @@ def page(
         checksum=p.checksum,
         text=p.text,
     )
-

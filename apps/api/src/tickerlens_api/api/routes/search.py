@@ -7,6 +7,7 @@ from qdrant_client import models as qmodels
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_user_if_auth_enabled
 from tickerlens_api.context.assembler import EvidenceChunk, build_context_blocks
 from tickerlens_api.db.models import DocumentChunk
 from tickerlens_api.db.session import get_db
@@ -31,7 +32,7 @@ from tickerlens_api.vectorstore.qdrant_store import ensure_collection, search as
 from tickerlens_api.temporal.intent import detect_temporal_intent, infer_document_type_preferences
 from tickerlens_api.temporal.scope import resolve_latest_doc_scope
 
-router = APIRouter(prefix="/search", tags=["search"])
+router = APIRouter(prefix="/search", tags=["search"], dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 @router.post("/vector", response_model=VectorSearchResponse)

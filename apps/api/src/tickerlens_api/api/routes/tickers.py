@@ -3,12 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_user_if_auth_enabled
 from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.schemas import DocumentListItem
 from tickerlens_api.documents.service import list_documents_for_ticker
 
 
-router = APIRouter(prefix="/tickers", tags=["tickers"])
+router = APIRouter(prefix="/tickers", tags=["tickers"], dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 @router.get("/{ticker}/documents", response_model=list[DocumentListItem])
@@ -44,4 +45,3 @@ def list_documents(
         )
         for d in docs
     ]
-

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from tickerlens_api.auth.dependencies import require_admin_if_auth_enabled
 from tickerlens_api.chunking.service import get_chunk_run, get_latest_successful_chunk_run
 from tickerlens_api.db.session import get_db
 from tickerlens_api.documents.service import get_document
@@ -16,7 +17,7 @@ from tickerlens_api.embeddings.service import (
 )
 from tickerlens_api.settings import settings
 
-router = APIRouter(tags=["embeddings"])
+router = APIRouter(tags=["embeddings"], dependencies=[Depends(require_admin_if_auth_enabled)])
 
 
 @router.post("/documents/{doc_id}/embed", response_model=EmbeddingRunOut)
