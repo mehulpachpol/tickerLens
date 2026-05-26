@@ -1,10 +1,22 @@
 "use client";
 
-import Link from "next/link";
+import {
+  BarChart3,
+  ChevronRight,
+  FileSearch,
+  HelpCircle,
+  LogOut,
+  PanelLeft,
+  Plus,
+  Settings,
+  ShieldAlert,
+  SlidersHorizontal,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
-import { BarChart3, FileSearch, PanelLeft, Plus, ShieldAlert, Sparkles, Wand2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/ChatComposer";
 import { ChatSessions } from "@/components/ChatSessions";
@@ -18,6 +30,15 @@ import type { ChatMessage, Conversation, RagRun, SseEvent } from "@/lib/types";
 function uuid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function initialsFromEmail(email: string | null): string {
+  if (!email) return "U";
+  const local = email.split("@")[0] ?? email;
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0] ?? "U"}${parts[1][0] ?? ""}`.toUpperCase();
+  const s = parts[0] ?? local;
+  return s.slice(0, 2).toUpperCase();
 }
 
 const STARTER_PROMPTS: Array<{ icon: ComponentType<{ size?: number; className?: string }>; title: string; text: string }> =
@@ -38,6 +59,7 @@ const STARTER_PROMPTS: Array<{ icon: ComponentType<{ size?: number; className?: 
       text: "Show mentions of capex and EV investments.",
     },
   ];
+
 
 function isoToMs(iso: string | undefined | null): number {
   if (!iso) return Date.now();
@@ -69,6 +91,7 @@ export function ChatApp() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [threads, setThreads] = useState<Record<string, ChatMessage[]>>({});
+  const [draftTickers, setDraftTickers] = useState<string[]>([]);
 
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -81,6 +104,8 @@ export function ChatApp() {
 
   const [activeCitationsMessageId, setActiveCitationsMessageId] = useState<string | null>(null);
   const [isCitationsOpen, setIsCitationsOpen] = useState(false);
+
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -97,7 +122,7 @@ export function ChatApp() {
   );
 
   const activeMessages = useMemo(() => (activeId ? threads[activeId] ?? [] : []), [threads, activeId]);
-  const tickers = activeConversation?.tickers ?? [];
+  const tickers = activeConversation?.tickers ?? draftTickers;
 
   const citationsPayload = useMemo(() => {
     if (!activeCitationsMessageId) return undefined;
@@ -139,14 +164,14 @@ export function ChatApp() {
   };
 
   useEffect(() => {
-    refreshConversations().catch(() => {});
+    refreshConversations().catch(() => { });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!activeId) return;
     if (threads[activeId]) return;
-    loadThread(activeId).catch(() => {});
+    loadThread(activeId).catch(() => { });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
@@ -188,18 +213,41 @@ export function ChatApp() {
     };
   }, [router]);
 
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-profile-menu="true"]')) return;
+      setProfileMenuOpen(false);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProfileMenuOpen(false);
+    };
+
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [profileMenuOpen]);
+
+  const doLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
+    } finally {
+      setProfileMenuOpen(false);
+      router.replace("/login?next=%2F");
+    }
+  };
+
   const upsertConversationTickers = async (nextTickers: string[]) => {
     if (!activeConversation) {
-      const res = await fetch("/api/conversations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ title: null, tickers: nextTickers }),
-      });
-      if (!res.ok) return;
-      const c = (await res.json()) as Conversation;
-      setConversations((prev) => [c, ...prev]);
-      setActiveId(c.conversation_id);
-      setThreads((prev) => ({ ...prev, [c.conversation_id]: [] }));
+      // Do not create a DB conversation until the user sends the first message.
+      setDraftTickers(nextTickers);
       return;
     }
 
@@ -211,24 +259,18 @@ export function ChatApp() {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ tickers: nextTickers }),
-    }).catch(() => {});
+    }).catch(() => { });
   };
 
   const onNew = async () => {
-    const res = await fetch("/api/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      // Starting a new chat should not carry scope forward.
-      body: JSON.stringify({ title: null, tickers: [] }),
-    });
-    if (!res.ok) return;
-    const c = (await res.json()) as Conversation;
-    setConversations((prev) => [c, ...prev]);
-    setActiveId(c.conversation_id);
-    setThreads((prev) => ({ ...prev, [c.conversation_id]: [] }));
+    // New chat is a local draft. Persist to DB only after the first user message.
+    setActiveId(null);
+    setDraftTickers([]);
     setActiveCitationsMessageId(null);
     setIsCitationsOpen(false);
+    setProfileMenuOpen(false);
     setInput("");
+    setSidebarOpen(false);
   };
 
   const onDelete = async (id: string) => {
@@ -326,6 +368,7 @@ export function ChatApp() {
       });
       if (!createRes.ok) return;
       const c = (await createRes.json()) as Conversation;
+      setDraftTickers([]);
       setConversations((prev) => [c, ...prev]);
       setActiveId(c.conversation_id);
       setThreads((prev) => ({ ...prev, [c.conversation_id]: prev[c.conversation_id] ?? [] }));
@@ -420,7 +463,10 @@ export function ChatApp() {
           type="button"
           className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[2px] lg:hidden"
           aria-label="Close sidebar overlay"
-          onClick={() => setSidebarOpen(false)}
+          onClick={() => {
+            setSidebarOpen(false);
+            setProfileMenuOpen(false);
+          }}
         />
       ) : null}
 
@@ -443,7 +489,10 @@ export function ChatApp() {
             </button>
             <button
               type="button"
-              onClick={() => setSidebarOpen(false)}
+              onClick={() => {
+                setSidebarOpen(false);
+                setProfileMenuOpen(false);
+              }}
               className="rounded-xl border border-border/70 bg-bg/20 p-2 text-muted hover:bg-bg/35 hover:text-text transition"
               aria-label="Hide sidebar"
               title="Hide sidebar"
@@ -460,12 +509,91 @@ export function ChatApp() {
               onSelect={(id) => {
                 setActiveId(id);
                 setSidebarOpen(false);
+                setProfileMenuOpen(false);
                 setActiveCitationsMessageId(null);
                 setIsCitationsOpen(false);
               }}
               onDelete={onDelete}
               showHeader={false}
             />
+          </div>
+
+          <div className="border-t border-border/60 p-3" data-profile-menu="true">
+            <div className="relative" data-profile-menu="true">
+              {profileMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute bottom-12 left-0 right-0 z-10 overflow-hidden rounded-2xl border border-border/70 bg-panel/90 shadow-soft backdrop-blur"
+                >
+                  <div className="flex items-center gap-3 px-3 py-2.5">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-bg/25 text-xs font-bold text-text">
+                      {initialsFromEmail(userEmail)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-text">{userEmail ?? "Signed in"}</div>
+                      <div className="truncate text-xs text-muted">TickerLens account</div>
+                    </div>
+                    <ChevronRight size={16} className="text-muted" />
+                  </div>
+
+                  <div className="h-px bg-border/50" />
+
+                  <div className="p-1.5">
+                    {[
+                      { label: "Profile", icon: UserRound },
+                      { label: "Personalization", icon: SlidersHorizontal },
+                      { label: "Settings", icon: Settings },
+                      { label: "Help", icon: HelpCircle },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        disabled
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-text hover:bg-bg/20 transition disabled:cursor-not-allowed disabled:opacity-60"
+                        title="Coming soon"
+                        role="menuitem"
+                      >
+                        <item.icon size={16} className="text-muted" />
+                        <span className="flex-1 text-left">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="h-px bg-border/50" />
+
+                  <div className="p-1.5">
+                    <button
+                      type="button"
+                      onClick={doLogout}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-dangerFg hover:bg-danger/15 transition"
+                      role="menuitem"
+                    >
+                      <LogOut size={16} className="text-danger" />
+                      <span className="flex-1 text-left">Log out</span>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setProfileMenuOpen((v) => !v)}
+                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-border/70 bg-bg/20 px-3 py-2.5 hover:bg-bg/30 transition"
+                aria-haspopup="menu"
+                aria-expanded={profileMenuOpen}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-bg/25 text-xs font-bold text-text">
+                    {initialsFromEmail(userEmail)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-text">{userEmail ?? "Account"}</div>
+                    <div className="truncate text-xs text-muted">Account</div>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-muted" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -489,7 +617,10 @@ export function ChatApp() {
             </button>
             <button
               type="button"
-              onClick={() => setSidebarOpen(false)}
+              onClick={() => {
+                setSidebarOpen(false);
+                setProfileMenuOpen(false);
+              }}
               className="rounded-xl border border-border/70 bg-bg/20 p-2 text-muted hover:bg-bg/35 hover:text-text transition"
               aria-label="Hide sidebar"
               title="Hide sidebar"
@@ -505,12 +636,91 @@ export function ChatApp() {
               onNew={onNew}
               onSelect={(id) => {
                 setActiveId(id);
+                setProfileMenuOpen(false);
                 setActiveCitationsMessageId(null);
                 setIsCitationsOpen(false);
               }}
               onDelete={onDelete}
               showHeader={false}
             />
+          </div>
+
+          <div className="border-t border-border/60 p-3" data-profile-menu="true">
+            <div className="relative" data-profile-menu="true">
+              {profileMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute bottom-12 left-0 right-0 z-10 overflow-hidden rounded-2xl border border-border/70 bg-panel/90 shadow-soft backdrop-blur"
+                >
+                  <div className="flex items-center gap-3 px-3 py-2.5">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-bg/25 text-xs font-bold text-text">
+                      {initialsFromEmail(userEmail)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-text">{userEmail ?? "Signed in"}</div>
+                      <div className="truncate text-xs text-muted">TickerLens account</div>
+                    </div>
+                    <ChevronRight size={16} className="text-muted" />
+                  </div>
+
+                  <div className="h-px bg-border/50" />
+
+                  <div className="p-1.5">
+                    {[
+                      { label: "Profile", icon: UserRound },
+                      { label: "Personalization", icon: SlidersHorizontal },
+                      { label: "Settings", icon: Settings },
+                      { label: "Help", icon: HelpCircle },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        disabled
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-text hover:bg-bg/20 transition disabled:cursor-not-allowed disabled:opacity-60"
+                        title="Coming soon"
+                        role="menuitem"
+                      >
+                        <item.icon size={16} className="text-muted" />
+                        <span className="flex-1 text-left">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="h-px bg-border/50" />
+
+                  <div className="p-1.5">
+                    <button
+                      type="button"
+                      onClick={doLogout}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-dangerFg hover:bg-danger/15 transition"
+                      role="menuitem"
+                    >
+                      <LogOut size={16} className="text-danger" />
+                      <span className="flex-1 text-left">Log out</span>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setProfileMenuOpen((v) => !v)}
+                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-border/70 bg-bg/20 px-3 py-2.5 hover:bg-bg/30 transition"
+                aria-haspopup="menu"
+                aria-expanded={profileMenuOpen}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-bg/25 text-xs font-bold text-text">
+                    {initialsFromEmail(userEmail)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-text">{userEmail ?? "Account"}</div>
+                    <div className="truncate text-xs text-muted">Account</div>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-muted" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -519,7 +729,7 @@ export function ChatApp() {
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-bg/40 px-4 py-3 backdrop-blur">
           <div className="flex items-center gap-2">
-            <button
+            {!sidebarOpen && <button
               type="button"
               onClick={() => setSidebarOpen((v) => !v)}
               className="rounded-xl border border-border/70 bg-panel/50 p-2 text-muted hover:bg-panel/70 hover:text-text transition"
@@ -527,43 +737,23 @@ export function ChatApp() {
               title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
             >
               <PanelLeft size={16} />
-            </button>
+            </button>}
             <Sparkles size={16} className="text-primary" />
             <div className="text-sm font-semibold">TickerLens</div>
           </div>
 
           <div className="flex items-center gap-2">
-            <Link
+            {/* <Link
               href="/timeline"
               className="rounded-xl border border-border/70 bg-panel/50 px-3 py-2 text-sm font-semibold text-text hover:bg-panel/70 transition"
               title="Open document timeline"
             >
               Timeline
-            </Link>
+            </Link> */}
 
-            {authStatus === "authed" ? (
-              <>
-                <span className="hidden max-w-[240px] truncate text-xs text-muted md:inline">
-                  {userEmail ?? "Signed in"}
-                </span>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await fetch("/api/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
-                    } finally {
-                      router.replace("/login?next=%2F");
-                    }
-                  }}
-                  className="rounded-xl border border-border/70 bg-panel/50 px-3 py-2 text-sm font-semibold text-text hover:bg-panel/70 transition"
-                  title="Sign out"
-                >
-                  Logout
-                </button>
-              </>
-            ) : null}
+            {/* Profile menu lives in the sidebar (bottom-left). */}
 
-            <div className="hidden items-center gap-2 text-xs text-muted md:flex">
+            {/* <div className="hidden items-center gap-2 text-xs text-muted md:flex">
               {tickers.length ? (
                 <span className="hidden md:inline">
                   Scope: <span className="font-semibold text-text">{tickers.join(", ")}</span>
@@ -574,7 +764,7 @@ export function ChatApp() {
                   Select tickers to start
                 </span>
               )}
-            </div>
+            </div> */}
           </div>
         </div>
 
