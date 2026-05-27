@@ -29,6 +29,7 @@ def init_tracing(app: FastAPI) -> None:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -49,4 +50,4 @@ def init_tracing(app: FastAPI) -> None:
 
     SQLAlchemyInstrumentor().instrument(engine=engine)
     HTTPXClientInstrumentor().instrument()
-
+    URLLib3Instrumentor().instrument()

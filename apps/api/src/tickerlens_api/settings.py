@@ -116,5 +116,11 @@ class Settings(BaseSettings):
     # Rate limiting (Phase 11)
     redis_url: str = "redis://redis:6379/0"
 
+    # Fixed-window limits (best-effort; fail-open if Redis unavailable)
+    rl_chat_per_minute: int = 20
+    rl_vector_search_per_minute: int = 60
+    rl_doc_download_per_minute: int = 120
+    rl_doc_upload_per_minute: int = 10
+
 
 settings = Settings()

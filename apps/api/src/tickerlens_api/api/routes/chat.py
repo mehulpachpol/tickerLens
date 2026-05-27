@@ -19,12 +19,16 @@ from tickerlens_api.conversations.service import (
     get_conversation,
     update_conversation,
 )
+from tickerlens_api.audit.service import log_audit
 from tickerlens_api.db.session import get_db
 from tickerlens_api.embeddings.openai_embedder import get_openai_client
 from tickerlens_api.search.schemas import HybridRerankRequest
+from tickerlens_api.security.limits import rate_limit_request
 from tickerlens_api.settings import settings
 from tickerlens_api.temporal.intent import detect_temporal_intent, infer_document_type_preferences
 from tickerlens_api.temporal.scope import resolve_latest_doc_scope
+from tickerlens_api.observability.rag_metrics import inc_request, observe_citations, observe_stage
+from tickerlens_api.observability.tracing import start_span
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -59,6 +63,10 @@ def chat_stream(
             status_code=422,
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
+
+    # Phase 11.3: cost-protection. Fail-open if Redis isn't available.
+    # Apply before auth checks so unauthenticated abuse is also throttled by IP.
+    rate_limit_request(request=request, prefix="chat:stream", limit=settings.rl_chat_per_minute, window_s=60)
 
     if settings.auth_enabled and not auth_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -169,9 +177,19 @@ def chat_stream(
         per_ticker_k=req.per_ticker_k,
     )
 
-    t = time.perf_counter()
-    retrieval = hybrid_rerank_search(search_req, db=db)
-    retrieval_ms = int((time.perf_counter() - t) * 1000)
+    with start_span(
+        "rag.retrieval",
+        endpoint="chat.stream",
+        tickers_count=len(effective_tickers or []),
+        doc_ids_count=len(effective_doc_ids or []),
+        rerank_backend=req.rerank_backend,
+        rerank_top_n=req.rerank_top_n,
+        top_k=req.top_k,
+    ):
+        t = time.perf_counter()
+        retrieval = hybrid_rerank_search(search_req, request=request, db=db)
+        retrieval_ms = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="chat.stream", stage="retrieval", duration_ms=retrieval_ms)
 
     allowed_chunk_ids = [h.chunk_id for h in retrieval.hits]
     allowed_set = set(allowed_chunk_ids)
@@ -211,34 +229,44 @@ def chat_stream(
         yield _sse_event(event="meta", data=meta)
 
         answer_parts: list[str] = []
+        t_stream = time.perf_counter()
         try:
             t_gen = time.perf_counter()
-            resp = client.chat.completions.create(
+            with start_span(
+                "rag.openai.generate",
                 model=settings.openai_chat_model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-                temperature=settings.openai_chat_temperature,
                 max_tokens=settings.openai_chat_max_tokens,
-                stream=True,
-            )
+                temperature=settings.openai_chat_temperature,
+            ):
+                resp = client.chat.completions.create(
+                    model=settings.openai_chat_model,
+                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
+                    temperature=settings.openai_chat_temperature,
+                    max_tokens=settings.openai_chat_max_tokens,
+                    stream=True,
+                )
 
-            for chunk in resp:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta.content
-                if not delta:
-                    continue
-                answer_parts.append(delta)
-                yield _sse_event(event="delta", data={"delta": delta})
+                for chunk in resp:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta.content
+                    if not delta:
+                        continue
+                    answer_parts.append(delta)
+                    yield _sse_event(event="delta", data={"delta": delta})
 
             answer_text = "".join(answer_parts)
             gen_ms = int((time.perf_counter() - t_gen) * 1000)
+            observe_stage(endpoint="chat.stream", stage="generation", duration_ms=gen_ms)
             answer_text = strip_unknown_citations(text=answer_text, allowed_chunk_ids=allowed_set)
 
-            used = list(dict.fromkeys(extract_chunk_ids(answer_text)))
-            used = [cid for cid in used if cid in allowed_set]
+            with start_span("rag.citations.extract", endpoint="chat.stream"):
+                used = list(dict.fromkeys(extract_chunk_ids(answer_text)))
+                used = [cid for cid in used if cid in allowed_set]
 
             citations = [palette[cid] for cid in used if cid in palette]
             payload = ChatCitationsPayload(used_chunk_ids=used, citations=citations)
+            observe_citations(endpoint="chat.stream", count=len(citations))
 
             # Phase 11: persist assistant response + retrieval/citation audit.
             if settings.auth_enabled and auth_user and conversation_id:
@@ -267,9 +295,48 @@ def chat_stream(
                     },
                 )
 
+            # Phase 11.3: audit (best-effort). Do not store full answer text here.
+            try:
+                log_audit(
+                    db,
+                    action="chat.stream",
+                    request=request,
+                    user_id=getattr(auth_user, "user_id", None),
+                    status_code=200,
+                    details={
+                        "conversation_id": conversation_id,
+                        "tickers": effective_tickers,
+                        "doc_ids": effective_doc_ids,
+                        "used_chunk_ids": used,
+                        "retrieval_ms": retrieval_ms,
+                        "generation_ms": gen_ms,
+                    },
+                )
+            except Exception:
+                pass
+
+            observe_stage(endpoint="chat.stream", stage="total", duration_ms=int((time.perf_counter() - t_stream) * 1000))
+            inc_request(endpoint="chat.stream", status="ok")
             yield _sse_event(event="citations", data=payload.model_dump())
             yield _sse_event(event="done", data={"ok": True})
         except Exception as e:
+            try:
+                log_audit(
+                    db,
+                    action="chat.stream_error",
+                    request=request,
+                    user_id=getattr(auth_user, "user_id", None),
+                    status_code=500,
+                    details={
+                        "conversation_id": conversation_id,
+                        "tickers": effective_tickers,
+                        "doc_ids": effective_doc_ids,
+                        "error": str(e),
+                    },
+                )
+            except Exception:
+                pass
+            inc_request(endpoint="chat.stream", status="error")
             yield _sse_event(event="error", data={"error": str(e)})
 
     return StreamingResponse(

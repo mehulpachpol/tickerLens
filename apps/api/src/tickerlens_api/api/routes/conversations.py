@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from tickerlens_api.auth.dependencies import get_current_user
+from tickerlens_api.audit.service import log_audit
 from tickerlens_api.conversations.schemas import (
     ConversationOut,
     CreateConversationRequest,
@@ -30,10 +31,19 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 @router.post("", response_model=ConversationOut)
 def create(
     req: CreateConversationRequest,
+    request: Request,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ConversationOut:
     c = create_conversation(db, user_id=user.user_id, title=req.title, tickers=req.tickers)
+    log_audit(
+        db,
+        action="conversations.create",
+        request=request,
+        user_id=user.user_id,
+        status_code=200,
+        details={"conversation_id": c.conversation_id, "tickers": req.tickers},
+    )
     return ConversationOut(
         conversation_id=c.conversation_id,
         title=c.title,
@@ -85,6 +95,7 @@ def get_(
 def patch_(
     conversation_id: str,
     req: UpdateConversationRequest,
+    request: Request,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ConversationOut:
@@ -98,6 +109,15 @@ def patch_(
     )
     if not c:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    log_audit(
+        db,
+        action="conversations.patch",
+        request=request,
+        user_id=user.user_id,
+        status_code=200,
+        details={"conversation_id": conversation_id, "updated_fields": list(data.keys())},
+    )
     return ConversationOut(
         conversation_id=c.conversation_id,
         title=c.title,
@@ -110,12 +130,21 @@ def patch_(
 @router.delete("/{conversation_id}")
 def delete_(
     conversation_id: str,
+    request: Request,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
     ok = delete_conversation(db, conversation_id=conversation_id, user_id=user.user_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    log_audit(
+        db,
+        action="conversations.delete",
+        request=request,
+        user_id=user.user_id,
+        status_code=200,
+        details={"conversation_id": conversation_id},
+    )
     return {"ok": True}
 
 

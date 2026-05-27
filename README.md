@@ -22,6 +22,7 @@ Implemented and working locally:
 - Timeline building blocks: `GET /tickers/{ticker}/documents` + `GET /documents/{doc_id}/versions`
 - Phase 10 (v1): daily NSE ingestion for `NIFTY_50` (discovery + download/dedupe + raw storage) + APScheduler service
 - Phase 11 (v1): optional session auth (cookie) + RBAC, per-user conversation + RAG run persistence, Prometheus metrics endpoint
+ - Phase 11.4 (v1): local observability stack (Prometheus + Grafana + Tempo + OTel collector) for traces + metrics
 
 ## Architecture (local dev)
 
@@ -70,6 +71,19 @@ Prereqs:
    - `http://localhost:8000/health`
    - `http://localhost:8000/version`
    - Swagger/OpenAPI: `http://localhost:8000/docs`
+
+### Observability (Phase 11.4)
+
+When running the compose stack, you also get:
+
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (default `admin` / `admin`)
+- Tempo (query endpoint): `http://localhost:3200`
+
+To enable trace export from the API, set in `infra/compose/.env`:
+
+- `TICKERLENS_OTEL_ENABLED=true`
+- `TICKERLENS_OTEL_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces`
 
 ### 2) Start the UI (port 3010)
 

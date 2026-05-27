@@ -17,6 +17,8 @@ from tickerlens_api.documents.service import (
     list_document_versions,
     upload_document,
 )
+from tickerlens_api.security.limits import rate_limit_request
+from tickerlens_api.settings import settings
 
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(require_user_if_auth_enabled)])
 
@@ -42,6 +44,8 @@ def upload(
             raise HTTPException(status_code=422, detail=f"Invalid filing_date: {e}") from e
 
     try:
+        # Phase 11.3: prevent accidental abuse (admin upload can be large/costly).
+        rate_limit_request(request=request, prefix="documents:upload", limit=settings.rl_doc_upload_per_minute, window_s=60)
         document, doc_file, deduped = upload_document(
             db,
             file=file,
@@ -123,13 +127,26 @@ def get_metadata(doc_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/{doc_id}/download", response_model=DownloadLinkResponse)
-def download(doc_id: str, db: Session = Depends(get_db)) -> DownloadLinkResponse:
+def download(doc_id: str, request: Request, db: Session = Depends(get_db)) -> DownloadLinkResponse:
+    # Phase 11.3: prevent hotlinking / runaway downloads.
+    rate_limit_request(request=request, prefix="documents:download", limit=settings.rl_doc_download_per_minute, window_s=60)
+
     doc_file = get_document_file(db, doc_id=doc_id)
     if not doc_file:
         raise HTTPException(status_code=404, detail="Document file not found")
 
     expires = 3600
     url = create_download_link(bucket=doc_file.bucket, key=doc_file.object_key, expires_in_seconds=expires)
+
+    # Phase 11.3: document access audit.
+    log_audit(
+        db,
+        action="documents.download",
+        request=request,
+        user_id=getattr(request.state, "user_id", None),
+        status_code=200,
+        details={"doc_id": doc_id},
+    )
     return DownloadLinkResponse(doc_id=doc_id, url=url, expires_in_seconds=expires)
 
 

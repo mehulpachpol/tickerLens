@@ -28,6 +28,7 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi>=0.46b0,<1.0",
   "opentelemetry-instrumentation-sqlalchemy>=0.46b0,<1.0",
   "opentelemetry-instrumentation-httpx>=0.46b0,<1.0",
+  "opentelemetry-instrumentation-urllib3>=0.46b0,<1.0",
   "redis>=5.0,<6.0",
   "uvicorn[standard]>=0.27,<1.0",
 ]

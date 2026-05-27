@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from qdrant_client import models as qmodels
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,20 +28,26 @@ from tickerlens_api.search.schemas import (
     VectorSearchResponse,
 )
 from tickerlens_api.settings import settings
+from tickerlens_api.security.limits import rate_limit_request
+from tickerlens_api.observability.tracing import start_span
 from tickerlens_api.vectorstore.qdrant_store import ensure_collection, search as qdrant_search
 from tickerlens_api.temporal.intent import detect_temporal_intent, infer_document_type_preferences
 from tickerlens_api.temporal.scope import resolve_latest_doc_scope
+from tickerlens_api.observability.rag_metrics import inc_request, observe_stage
 
 router = APIRouter(prefix="/search", tags=["search"], dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 @router.post("/vector", response_model=VectorSearchResponse)
-def vector_search(req: VectorSearchRequest) -> VectorSearchResponse:
+def vector_search(req: VectorSearchRequest, request: Request) -> VectorSearchResponse:
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=422,
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
+
+    # Phase 11.3: protect embedding spend.
+    rate_limit_request(request=request, prefix="search:vector", limit=settings.rl_vector_search_per_minute, window_s=60)
 
     try:
         model, dims, vector_size, collection = compute_embedding_target(
@@ -52,7 +58,10 @@ def vector_search(req: VectorSearchRequest) -> VectorSearchResponse:
 
     ensure_collection(collection_name=collection, vector_size=vector_size)
 
-    query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
+    t = time.perf_counter()
+    with start_span("rag.embed.query", endpoint="search.vector", model=model, dimensions=dims or 0):
+        query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
+    observe_stage(endpoint="search.vector", stage="embed_query", duration_ms=int((time.perf_counter() - t) * 1000))
 
     must: list[qmodels.FieldCondition] = []
     if req.tickers:
@@ -63,7 +72,12 @@ def vector_search(req: VectorSearchRequest) -> VectorSearchResponse:
         must.append(qmodels.FieldCondition(key="chunk_run_id", match=qmodels.MatchValue(value=req.chunk_run_id)))
 
     query_filter = qmodels.Filter(must=must) if must else None
-    hits = qdrant_search(collection_name=collection, query_vector=query_vec, query_filter=query_filter, limit=req.top_k)
+    t = time.perf_counter()
+    with start_span("rag.qdrant.query", endpoint="search.vector", collection=collection, limit=req.top_k):
+        hits = qdrant_search(collection_name=collection, query_vector=query_vec, query_filter=query_filter, limit=req.top_k)
+    observe_stage(endpoint="search.vector", stage="qdrant_query", duration_ms=int((time.perf_counter() - t) * 1000))
+
+    inc_request(endpoint="search.vector", status="ok")
 
     return VectorSearchResponse(
         collection=collection,
@@ -147,13 +161,16 @@ def bm25_search(req: BM25SearchRequest) -> BM25SearchResponse:
 
 
 @router.post("/hybrid", response_model=HybridSearchResponse)
-def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> HybridSearchResponse:
+def hybrid_search(req: HybridSearchRequest, request: Request, db: Session = Depends(get_db)) -> HybridSearchResponse:
     # Hybrid search needs both OpenSearch (BM25) and Qdrant (vector).
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=422,
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
+
+    # Phase 11.3: protect embedding spend.
+    rate_limit_request(request=request, prefix="search:hybrid", limit=settings.rl_vector_search_per_minute, window_s=60)
 
     # Phase 9 temporal scoping: if the query asks for "latest", restrict to latest relevant docs (unless doc_ids explicitly provided).
     effective_doc_ids = req.doc_ids
@@ -179,7 +196,10 @@ def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> Hy
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     ensure_collection(collection_name=collection, vector_size=vector_size)
-    query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
+    t = time.perf_counter()
+    with start_span("rag.embed.query", endpoint="search.hybrid", model=model, dimensions=dims or 0):
+        query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
+    observe_stage(endpoint="search.hybrid", stage="embed_query", duration_ms=int((time.perf_counter() - t) * 1000))
 
     must: list[qmodels.FieldCondition] = []
     if req.tickers:
@@ -190,12 +210,15 @@ def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> Hy
         must.append(qmodels.FieldCondition(key="chunk_run_id", match=qmodels.MatchValue(value=req.chunk_run_id)))
     query_filter = qmodels.Filter(must=must) if must else None
 
-    vector_hits = qdrant_search(
-        collection_name=collection,
-        query_vector=query_vec,
-        query_filter=query_filter,
-        limit=req.vector_top_n,
-    )
+    t = time.perf_counter()
+    with start_span("rag.qdrant.query", endpoint="search.hybrid", collection=collection, limit=req.vector_top_n):
+        vector_hits = qdrant_search(
+            collection_name=collection,
+            query_vector=query_vec,
+            query_filter=query_filter,
+            limit=req.vector_top_n,
+        )
+    observe_stage(endpoint="search.hybrid", stage="qdrant_query", duration_ms=int((time.perf_counter() - t) * 1000))
 
     # BM25 side
     index_name = compute_chunks_index_name(version=req.index_version)
@@ -224,7 +247,14 @@ def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> Hy
         "size": req.bm25_top_n,
         "highlight": {"fields": {"text": {"fragment_size": 160, "number_of_fragments": 2}}},
     }
-    os_resp = os_client.search(index=index_name, body=os_body)
+    t = time.perf_counter()
+    with start_span("rag.opensearch.search", endpoint="search.hybrid", index=index_name, size=req.bm25_top_n):
+        os_resp = os_client.search(index=index_name, body=os_body)
+    observe_stage(
+        endpoint="search.hybrid",
+        stage="opensearch_query",
+        duration_ms=int((time.perf_counter() - t) * 1000),
+    )
     bm25_hits = (((os_resp or {}).get("hits") or {}).get("hits") or [])
 
     # Reciprocal Rank Fusion (rank-based merge so we don't have to calibrate score scales).
@@ -310,6 +340,7 @@ def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> Hy
     ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     top_ids = [cid for cid, _ in ordered[: req.top_k]]
 
+    inc_request(endpoint="search.hybrid", status="ok")
     return HybridSearchResponse(
         index_name=index_name,
         collection=collection,
@@ -328,7 +359,7 @@ def hybrid_search(req: HybridSearchRequest, db: Session = Depends(get_db)) -> Hy
 
 
 @router.post("/hybrid_rerank", response_model=HybridRerankResponse)
-def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)) -> HybridRerankResponse:
+def hybrid_rerank_search(req: HybridRerankRequest, request: Request, db: Session = Depends(get_db)) -> HybridRerankResponse:
     """
     Phase 7: run hybrid retrieval (Phase 6), then rerank the top-N candidates.
 
@@ -347,6 +378,9 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
             status_code=422,
             detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
         )
+
+    # Phase 11.3: protect embedding spend (hybrid_rerank includes embedding + rerank compute).
+    rate_limit_request(request=request, prefix="search:hybrid_rerank", limit=settings.rl_vector_search_per_minute, window_s=60)
 
     # Phase 9 temporal scoping (same behavior as /search/hybrid).
     effective_doc_ids = req.doc_ids
@@ -374,8 +408,10 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
     ensure_collection(collection_name=collection, vector_size=vector_size)
 
     t = time.perf_counter()
-    query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
+    with start_span("rag.embed.query", endpoint="search.hybrid_rerank", model=model, dimensions=dims or 0):
+        query_vec = embed_texts(texts=[req.query], model=model, dimensions=dims)[0]
     timings["openai_embed_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="embed_query", duration_ms=timings["openai_embed_ms"])
 
     must: list[qmodels.FieldCondition] = []
     if req.tickers:
@@ -387,13 +423,15 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
     query_filter = qmodels.Filter(must=must) if must else None
 
     t = time.perf_counter()
-    vector_hits = qdrant_search(
-        collection_name=collection,
-        query_vector=query_vec,
-        query_filter=query_filter,
-        limit=req.vector_top_n,
-    )
+    with start_span("rag.qdrant.query", endpoint="search.hybrid_rerank", collection=collection, limit=req.vector_top_n):
+        vector_hits = qdrant_search(
+            collection_name=collection,
+            query_vector=query_vec,
+            query_filter=query_filter,
+            limit=req.vector_top_n,
+        )
     timings["qdrant_query_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="qdrant_query", duration_ms=timings["qdrant_query_ms"])
 
     # BM25 side
     index_name = compute_chunks_index_name(version=req.index_version)
@@ -423,8 +461,10 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
         "highlight": {"fields": {"text": {"fragment_size": 160, "number_of_fragments": 2}}},
     }
     t = time.perf_counter()
-    os_resp = os_client.search(index=index_name, body=os_body)
+    with start_span("rag.opensearch.search", endpoint="search.hybrid_rerank", index=index_name, size=req.bm25_top_n):
+        os_resp = os_client.search(index=index_name, body=os_body)
     timings["opensearch_query_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="opensearch_query", duration_ms=timings["opensearch_query_ms"])
     bm25_hits = (((os_resp or {}).get("hits") or {}).get("hits") or [])
 
     # Reciprocal Rank Fusion candidates (Phase 6 output).
@@ -512,11 +552,13 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
     t = time.perf_counter()
     text_by_id: dict[str, str] = {}
     if candidate_ids:
-        stmt = select(DocumentChunk).where(DocumentChunk.chunk_id.in_(candidate_ids))
-        rows = list(db.execute(stmt).scalars().all())
-        for r in rows:
-            text_by_id[r.chunk_id] = r.text or ""
+        with start_span("rag.postgres.chunk_fetch", endpoint="search.hybrid_rerank", candidates=len(candidate_ids)):
+            stmt = select(DocumentChunk).where(DocumentChunk.chunk_id.in_(candidate_ids))
+            rows = list(db.execute(stmt).scalars().all())
+            for r in rows:
+                text_by_id[r.chunk_id] = r.text or ""
     timings["postgres_chunk_fetch_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="postgres_chunk_fetch", duration_ms=timings["postgres_chunk_fetch_ms"])
 
     backend = resolve_backend(backend=req.rerank_backend, model=req.rerank_model)
     rerank_model = req.rerank_model or get_default_model(backend=backend)
@@ -526,14 +568,16 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
         RerankCandidate(chunk_id=cid, passage=text_by_id.get(cid, "")) for cid in candidate_ids
     ]
     t = time.perf_counter()
-    rerank_scores = rerank_candidates(
-        backend=backend,
-        query=req.query,
-        candidates=candidates,
-        model=rerank_model,
-        max_passage_chars=max_passage_chars,
-    )
+    with start_span("rag.rerank", endpoint="search.hybrid_rerank", backend=backend, model=rerank_model, candidates=len(candidates)):
+        rerank_scores = rerank_candidates(
+            backend=backend,
+            query=req.query,
+            candidates=candidates,
+            model=rerank_model,
+            max_passage_chars=max_passage_chars,
+        )
     timings["rerank_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="rerank", duration_ms=timings["rerank_ms"])
 
     # Rank by rerank score, with fusion score as tie-breaker.
     scored = []
@@ -589,12 +633,14 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
         )
 
     t = time.perf_counter()
-    blocks = build_context_blocks(
-        requested_tickers=req.tickers,
-        chunks=evidence,
-        max_chunk_chars=max_passage_chars,
-    )
+    with start_span("rag.context.build", endpoint="search.hybrid_rerank", selected=len(selected_ids)):
+        blocks = build_context_blocks(
+            requested_tickers=req.tickers,
+            chunks=evidence,
+            max_chunk_chars=max_passage_chars,
+        )
     timings["context_build_ms"] = int((time.perf_counter() - t) * 1000)
+    observe_stage(endpoint="search.hybrid_rerank", stage="context_build", duration_ms=timings["context_build_ms"])
 
     context_blocks = [
         TickerContextBlock(ticker=t, chunks=chunk_ids, context=ctx) for t, chunk_ids, ctx in blocks
@@ -612,6 +658,8 @@ def hybrid_rerank_search(req: HybridRerankRequest, db: Session = Depends(get_db)
             }
         )
 
+    observe_stage(endpoint="search.hybrid_rerank", stage="total", duration_ms=int((time.perf_counter() - t_total) * 1000))
+    inc_request(endpoint="search.hybrid_rerank", status="ok")
     return HybridRerankResponse(
         index_name=index_name,
         collection=collection,

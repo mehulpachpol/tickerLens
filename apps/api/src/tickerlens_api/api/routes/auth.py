@@ -9,6 +9,7 @@ from tickerlens_api.auth.service import authenticate_user, bootstrap_admin, crea
 from tickerlens_api.audit.service import log_audit
 from tickerlens_api.db.session import get_db
 from tickerlens_api.security.rate_limit import rate_limit_or_429
+from tickerlens_api.security.request_actor import get_client_ip
 from tickerlens_api.settings import settings
 
 
@@ -32,7 +33,7 @@ def register(req: RegisterRequest, request: Request, response: Response, db: Ses
     if not settings.auth_allow_register:
         raise HTTPException(status_code=403, detail="Registration disabled")
 
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     rate_limit_or_429(key=f"auth:register:{ip}", limit=5, window_s=60)
 
     u = create_user(db, email=req.email, password=req.password, role="user")
@@ -61,7 +62,7 @@ def login(req: LoginRequest, request: Request, response: Response, db: Session =
     if not settings.auth_enabled:
         raise HTTPException(status_code=400, detail="Auth is disabled")
 
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     rate_limit_or_429(key=f"auth:login:{ip}", limit=10, window_s=60)
 
     u = authenticate_user(db, email=req.email, password=req.password)

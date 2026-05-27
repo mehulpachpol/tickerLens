@@ -24,10 +24,24 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         try:
             user_id = getattr(request.state, "user_id", None)
+            trace_id = None
+            try:
+                from opentelemetry import trace as _trace  # type: ignore
+
+                span = _trace.get_current_span()
+                ctx = span.get_span_context() if span else None
+                if ctx and getattr(ctx, "trace_id", 0):
+                    trace_id = f"{ctx.trace_id:032x}"
+            except Exception:
+                trace_id = None
+
+            if trace_id:
+                response.headers["X-Trace-ID"] = trace_id
             _logger.info(
                 "request",
                 extra={
                     "request_id": request_id,
+                    "trace_id": trace_id,
                     "method": request.method,
                     "path": request.url.path,
                     "status_code": response.status_code,

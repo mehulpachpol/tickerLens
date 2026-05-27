@@ -1,0 +1,132 @@
+{
+  "uid": "tickerlens-rag",
+  "title": "TickerLens - RAG Overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["tickerlens", "rag"],
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "type": "query",
+        "label": "Endpoint",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "query": "label_values(tickerlens_rag_requests_total, endpoint)",
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "RAG Requests/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (endpoint, status) (rate(tickerlens_rag_requests_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "{{endpoint}} / {{status}}"
+        }
+      ],
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Chat total latency p50/p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(tickerlens_rag_stage_duration_ms_bucket{endpoint=\"chat.stream\",stage=\"total\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(tickerlens_rag_stage_duration_ms_bucket{endpoint=\"chat.stream\",stage=\"total\"}[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Chat stages p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(tickerlens_rag_stage_duration_ms_bucket{endpoint=\"chat.stream\",stage=~\"retrieval|generation\"}[$__rate_interval])))",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Search stages p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint, stage) (rate(tickerlens_rag_stage_duration_ms_bucket{endpoint=~\"search\\\\..+\",stage=~\"embed_query|qdrant_query|opensearch_query|rerank\"}[$__rate_interval])))",
+          "legendFormat": "{{endpoint}} / {{stage}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Citations per answer (p50/p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(tickerlens_rag_citations_per_answer_bucket{endpoint=\"chat.stream\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(tickerlens_rag_citations_per_answer_bucket{endpoint=\"chat.stream\"}[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "text",
+      "title": "Notes",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 7 },
+      "options": {
+        "mode": "markdown",
+        "content": "If panels show **No data**:\n\n1. Ensure the stack is up: `./scripts/dev.ps1 up`\n2. Confirm Prometheus is scraping the API: Prometheus → Status → Targets.\n3. Generate traffic by running a few searches/chats.\n4. For traces in Tempo, enable `TICKERLENS_OTEL_ENABLED=true` and restart the API.\n"
+      }
+    }
+  ]
+}
