@@ -1,45 +1,19 @@
 from __future__ import annotations
 
-import json
-import time
-from typing import Iterable
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
+from tickerlens_api.agent.controller import run_agent_stream, validate_agent_enabled
 from tickerlens_api.auth.dependencies import get_current_user_optional
-from tickerlens_api.chat.citations import extract_chunk_ids, strip_unknown_citations
-from tickerlens_api.chat.prompting import build_system_prompt, build_user_prompt
-from tickerlens_api.chat.schemas import ChatCitationsPayload, ChatStreamRequest, Citation
-from tickerlens_api.conversations.service import (
-    add_message,
-    add_rag_run,
-    create_conversation,
-    get_conversation,
-    update_conversation,
-)
-from tickerlens_api.audit.service import log_audit
+from tickerlens_api.chat.schemas import ChatStreamRequest
+from tickerlens_api.conversations.service import add_message, create_conversation, get_conversation, update_conversation
 from tickerlens_api.db.session import get_db
-from tickerlens_api.embeddings.openai_embedder import get_openai_client
-from tickerlens_api.search.schemas import HybridRerankRequest
 from tickerlens_api.security.limits import rate_limit_request
 from tickerlens_api.settings import settings
-from tickerlens_api.temporal.intent import detect_temporal_intent, infer_document_type_preferences
-from tickerlens_api.temporal.scope import resolve_latest_doc_scope
-from tickerlens_api.observability.rag_metrics import inc_request, observe_citations, observe_stage
-from tickerlens_api.observability.tracing import start_span
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-
-def _sse_event(*, event: str, data: dict | str) -> bytes:
-    if isinstance(data, dict):
-        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    else:
-        payload = data
-    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
 
 @router.post("/stream")
@@ -50,19 +24,17 @@ def chat_stream(
     auth_user=Depends(get_current_user_optional),
 ) -> StreamingResponse:
     """
-    Phase 8: Constrained generation with citations + SSE streaming.
+    Phase 12.1: Agentic chat controller + constrained generation with citations + SSE streaming.
 
     Streaming protocol:
     - event: delta      data: {"delta":"..."}
+    - event: agent_step data: {"step":"...", ...}  (optional UI transparency)
+    - event: clarify    data: {"kind":"...", "question":"...", "options":[...]} (optional)
     - event: citations  data: {"used_chunk_ids":[...], "citations":[...]}
     - event: done       data: {"ok":true}
     """
 
-    if not settings.openai_api_key:
-        raise HTTPException(
-            status_code=422,
-            detail="Missing OpenAI API key. Set OPENAI_API_KEY (or TICKERLENS_OPENAI_API_KEY).",
-        )
+    validate_agent_enabled()
 
     # Phase 11.3: cost-protection. Fail-open if Redis isn't available.
     # Apply before auth checks so unauthenticated abuse is also throttled by IP.
@@ -120,227 +92,17 @@ def chat_stream(
 
         add_message(db, conversation_id=conversation_id, user_id=auth_user.user_id, role="user", content=req.question)
 
-    # Reuse Phase 7 retrieval by calling the same internal function.
-    # We intentionally keep this manual-first and will refactor into a shared service later.
-    from tickerlens_api.api.routes.search import hybrid_rerank_search
-
-    # Phase 9: temporal scoping (doc_ids) for "latest" questions.
-    effective_doc_ids = req.doc_ids
-    temporal_debug: dict | None = None
-    if effective_doc_ids is None and effective_tickers:
-        intent = detect_temporal_intent(question=req.question)
-        if intent.mode == "latest":
-            prefs = infer_document_type_preferences(question=req.question)
-            scope = resolve_latest_doc_scope(
-                db,
-                tickers=effective_tickers,
-                preferred_document_types=prefs.document_types,
-                reason=f"{intent.reason};{prefs.reason}",
-            )
-            if scope.doc_ids:
-                effective_doc_ids = scope.doc_ids
-                temporal_debug = {
-                    "mode": scope.mode,
-                    "reason": scope.reason,
-                    "preferred_document_types": scope.preferred_document_types,
-                    "selected_docs": [
-                        {
-                            "doc_id": d.doc_id,
-                            "ticker": d.ticker,
-                            "document_type": d.document_type,
-                            "fiscal_year": d.fiscal_year,
-                            "filing_date": d.filing_date,
-                            "version": d.version,
-                        }
-                        for d in scope.selected
-                    ],
-                }
-
-    search_req = HybridRerankRequest(
-        query=req.question,
-        top_k=req.top_k,
-        tickers=effective_tickers,
-        doc_ids=effective_doc_ids,
-        chunk_run_id=req.chunk_run_id,
-        embedding_model=req.embedding_model,
-        dimensions=req.dimensions,
-        vector_top_n=req.vector_top_n,
-        index_version=req.index_version,
-        bm25_top_n=req.bm25_top_n,
-        rrf_k=req.rrf_k,
-        vector_weight=req.vector_weight,
-        bm25_weight=req.bm25_weight,
-        rerank_backend=req.rerank_backend,
-        rerank_model=req.rerank_model,
-        rerank_top_n=req.rerank_top_n,
-        passage_max_chars=req.passage_max_chars,
-        per_ticker_k=req.per_ticker_k,
-    )
-
-    with start_span(
-        "rag.retrieval",
-        endpoint="chat.stream",
-        tickers_count=len(effective_tickers or []),
-        doc_ids_count=len(effective_doc_ids or []),
-        rerank_backend=req.rerank_backend,
-        rerank_top_n=req.rerank_top_n,
-        top_k=req.top_k,
-    ):
-        t = time.perf_counter()
-        retrieval = hybrid_rerank_search(search_req, request=request, db=db)
-        retrieval_ms = int((time.perf_counter() - t) * 1000)
-    observe_stage(endpoint="chat.stream", stage="retrieval", duration_ms=retrieval_ms)
-
-    allowed_chunk_ids = [h.chunk_id for h in retrieval.hits]
-    allowed_set = set(allowed_chunk_ids)
-
-    # Build per-chunk citation palette from retrieval hits. The model cites chunk_id; we attach the rest.
-    palette: dict[str, Citation] = {}
-    for h in retrieval.hits:
-        download_endpoint = f"/documents/{h.doc_id}/download" if h.doc_id else None
-        palette[h.chunk_id] = Citation(
-            chunk_id=h.chunk_id,
-            ticker=h.ticker,
-            doc_id=h.doc_id,
-            document_type=h.document_type,
-            fiscal_year=h.fiscal_year,
-            filing_date=str(h.filing_date) if h.filing_date else None,
-            version=h.version,
-            section=h.section,
-            page_start=h.page_start,
-            page_end=h.page_end,
-            download_endpoint=download_endpoint,
-        )
-
-    context = "\n\n".join(b.context for b in retrieval.context_blocks).strip()
-
-    system = build_system_prompt()
-    user_prompt = build_user_prompt(question=req.question, allowed_chunk_ids=allowed_chunk_ids, context=context)
-
-    client = get_openai_client()
-
-    def stream() -> Iterable[bytes]:
-        # Small debug payload for clients (optional to use).
-        meta = {"retrieval_ms": retrieval_ms, "candidates": retrieval.candidates}
-        if temporal_debug:
-            meta["temporal"] = temporal_debug
-        if conversation_id:
-            meta["conversation_id"] = conversation_id
-        yield _sse_event(event="meta", data=meta)
-
-        answer_parts: list[str] = []
-        t_stream = time.perf_counter()
-        try:
-            t_gen = time.perf_counter()
-            with start_span(
-                "rag.openai.generate",
-                model=settings.openai_chat_model,
-                max_tokens=settings.openai_chat_max_tokens,
-                temperature=settings.openai_chat_temperature,
-            ):
-                resp = client.chat.completions.create(
-                    model=settings.openai_chat_model,
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-                    temperature=settings.openai_chat_temperature,
-                    max_tokens=settings.openai_chat_max_tokens,
-                    stream=True,
-                )
-
-                for chunk in resp:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta.content
-                    if not delta:
-                        continue
-                    answer_parts.append(delta)
-                    yield _sse_event(event="delta", data={"delta": delta})
-
-            answer_text = "".join(answer_parts)
-            gen_ms = int((time.perf_counter() - t_gen) * 1000)
-            observe_stage(endpoint="chat.stream", stage="generation", duration_ms=gen_ms)
-            answer_text = strip_unknown_citations(text=answer_text, allowed_chunk_ids=allowed_set)
-
-            with start_span("rag.citations.extract", endpoint="chat.stream"):
-                used = list(dict.fromkeys(extract_chunk_ids(answer_text)))
-                used = [cid for cid in used if cid in allowed_set]
-
-            citations = [palette[cid] for cid in used if cid in palette]
-            payload = ChatCitationsPayload(used_chunk_ids=used, citations=citations)
-            observe_citations(endpoint="chat.stream", count=len(citations))
-
-            # Phase 11: persist assistant response + retrieval/citation audit.
-            if settings.auth_enabled and auth_user and conversation_id:
-                add_message(
-                    db,
-                    conversation_id=conversation_id,
-                    user_id=auth_user.user_id,
-                    role="assistant",
-                    content=answer_text,
-                )
-                add_rag_run(
-                    db,
-                    conversation_id=conversation_id,
-                    user_id=auth_user.user_id,
-                    question=req.question,
-                    answer=answer_text,
-                    tickers=effective_tickers,
-                    doc_ids=effective_doc_ids,
-                    retrieval={**retrieval.model_dump(), "temporal": temporal_debug} if temporal_debug else retrieval.model_dump(),
-                    citations=payload.model_dump(),
-                    timings_ms={**(retrieval.timings_ms or {}), "retrieval_ms": retrieval_ms, "generation_ms": gen_ms},
-                    models={
-                        "chat_model": settings.openai_chat_model,
-                        "embedding_model": retrieval.embedding_model,
-                        "rerank_model": retrieval.rerank_model,
-                    },
-                )
-
-            # Phase 11.3: audit (best-effort). Do not store full answer text here.
-            try:
-                log_audit(
-                    db,
-                    action="chat.stream",
-                    request=request,
-                    user_id=getattr(auth_user, "user_id", None),
-                    status_code=200,
-                    details={
-                        "conversation_id": conversation_id,
-                        "tickers": effective_tickers,
-                        "doc_ids": effective_doc_ids,
-                        "used_chunk_ids": used,
-                        "retrieval_ms": retrieval_ms,
-                        "generation_ms": gen_ms,
-                    },
-                )
-            except Exception:
-                pass
-
-            observe_stage(endpoint="chat.stream", stage="total", duration_ms=int((time.perf_counter() - t_stream) * 1000))
-            inc_request(endpoint="chat.stream", status="ok")
-            yield _sse_event(event="citations", data=payload.model_dump())
-            yield _sse_event(event="done", data={"ok": True})
-        except Exception as e:
-            try:
-                log_audit(
-                    db,
-                    action="chat.stream_error",
-                    request=request,
-                    user_id=getattr(auth_user, "user_id", None),
-                    status_code=500,
-                    details={
-                        "conversation_id": conversation_id,
-                        "tickers": effective_tickers,
-                        "doc_ids": effective_doc_ids,
-                        "error": str(e),
-                    },
-                )
-            except Exception:
-                pass
-            inc_request(endpoint="chat.stream", status="error")
-            yield _sse_event(event="error", data={"error": str(e)})
-
     return StreamingResponse(
-        stream(),
+        run_agent_stream(
+            req,
+            request=request,
+            db=db,
+            auth_user=auth_user,
+            conversation_id=conversation_id,
+            effective_tickers=effective_tickers,
+            effective_doc_ids=req.doc_ids,
+            temporal_debug=None,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -348,3 +110,4 @@ def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+

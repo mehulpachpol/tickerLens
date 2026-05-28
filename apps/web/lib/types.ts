@@ -17,12 +17,25 @@ export type ChatCitationsPayload = {
   citations: Citation[];
 };
 
+export type AgentStep = Record<string, any> & {
+  step: string;
+};
+
+export type ClarificationPayload = {
+  kind: string;
+  question: string;
+  options?: string[] | null;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   createdAt: number;
   citations?: ChatCitationsPayload;
+  meta?: Record<string, any>;
+  agentSteps?: AgentStep[];
+  clarification?: ClarificationPayload;
   error?: string;
   status?: "streaming" | "done" | "stopped";
 };
@@ -53,9 +66,11 @@ export type RagRun = {
 
 export type SseEvent =
   | { event: "meta"; data: Record<string, any> }
+  | { event: "agent_step"; data: AgentStep }
+  | { event: "clarify"; data: ClarificationPayload }
   | { event: "delta"; data: { delta: string } }
   | { event: "citations"; data: ChatCitationsPayload }
-  | { event: "done"; data: { ok: true } }
+  | { event: "done"; data: { ok: true; mode?: string } }
   | { event: "error"; data: { error: string } };
 
 export type DocumentListItem = {

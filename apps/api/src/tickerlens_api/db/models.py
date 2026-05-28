@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
     pass
+
+
+# Cross-dialect JSON column:
+# - PostgreSQL uses JSONB for better indexing/ops
+# - SQLite (tests) uses the generic JSON type
+JSONB = JSON().with_variant(PG_JSONB, "postgresql")
 
 
 class Company(Base):

@@ -25,7 +25,7 @@ import { CitationsDrawer } from "@/components/CitationsDrawer";
 import { TickerPicker } from "@/components/TickerPicker";
 import { streamSse } from "@/lib/sse";
 import { saveActiveConversationId } from "@/lib/storage";
-import type { ChatMessage, Conversation, RagRun, SseEvent } from "@/lib/types";
+import type { AgentStep, ChatMessage, ClarificationPayload, Conversation, RagRun, SseEvent } from "@/lib/types";
 
 function uuid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -67,18 +67,36 @@ function isoToMs(iso: string | undefined | null): number {
   return Number.isFinite(t) ? t : Date.now();
 }
 
+function clarificationFromRun(r: RagRun): ClarificationPayload | undefined {
+  const steps = (r.retrieval as any)?.agent?.steps;
+  if (!Array.isArray(steps)) return undefined;
+  const s = steps.find((x: any) => x && x.step === "ask_clarifying_question");
+  if (!s) return undefined;
+  return {
+    kind: typeof s.kind === "string" ? s.kind : "other",
+    question: r.answer ?? "",
+    options: Array.isArray(s.options) ? s.options : null,
+  };
+}
+
 function runsToThread(runs: RagRun[]): ChatMessage[] {
   const ordered = [...runs].sort((a, b) => isoToMs(a.created_at) - isoToMs(b.created_at));
   const out: ChatMessage[] = [];
   for (const r of ordered) {
     const ts = isoToMs(r.created_at);
     out.push({ id: `${r.run_id}:user`, role: "user", content: r.question, createdAt: ts });
+
+    const agentSteps = ((r.retrieval as any)?.agent?.steps ?? undefined) as AgentStep[] | undefined;
+    const clarification = clarificationFromRun(r);
     out.push({
       id: `${r.run_id}:assistant`,
       role: "assistant",
       content: r.answer ?? "",
       createdAt: ts + 1,
       citations: r.citations ?? undefined,
+      agentSteps,
+      clarification,
+      meta: r.timings_ms || r.models ? { timings_ms: r.timings_ms ?? undefined, models: r.models ?? undefined } : undefined,
       status: "done",
     });
   }
@@ -302,12 +320,20 @@ export function ChatApp() {
     setIsStreaming(false);
   };
 
-  const patchThreadMessage = (conversationId: string, messageId: string, patch: Partial<ChatMessage>) => {
+  const patchThreadMessage = (
+    conversationId: string,
+    messageId: string,
+    patch: Partial<ChatMessage> | ((prev: ChatMessage) => ChatMessage)
+  ) => {
     setThreads((prev) => {
       const cur = prev[conversationId] ?? [];
       return {
         ...prev,
-        [conversationId]: cur.map((m) => (m.id === messageId ? { ...m, ...patch } : m)),
+        [conversationId]: cur.map((m) => {
+          if (m.id !== messageId) return m;
+          if (typeof patch === "function") return patch(m);
+          return { ...m, ...patch };
+        }),
       };
     });
   };
@@ -324,6 +350,30 @@ export function ChatApp() {
   };
 
   const handleEvent = (conversationId: string, assistantId: string, evt: SseEvent) => {
+    if (evt.event === "meta") {
+      patchThreadMessage(conversationId, assistantId, (prev) => ({ ...prev, meta: evt.data }));
+      return;
+    }
+    if (evt.event === "agent_step") {
+      patchThreadMessage(conversationId, assistantId, (prev) => ({
+        ...prev,
+        agentSteps: [...(prev.agentSteps ?? []), evt.data],
+      }));
+      return;
+    }
+    if (evt.event === "clarify") {
+      patchThreadMessage(conversationId, assistantId, (prev) => ({
+        ...prev,
+        clarification: evt.data,
+        status: "done",
+      }));
+
+      // If the agent needs ticker input, open the picker immediately.
+      if (evt.data.kind === "tickers" || evt.data.kind === "comparison_scope") {
+        setIsTickerPickerOpen(true);
+      }
+      return;
+    }
     if (evt.event === "delta") {
       appendDelta(conversationId, assistantId, evt.data.delta);
       return;
@@ -350,13 +400,6 @@ export function ChatApp() {
     if (isStreaming) return;
     const q = question.trim();
     if (!q) return;
-
-    // Must have a scope for now; if not present, open picker and keep the draft.
-    if (!tickers.length) {
-      setInput(q);
-      setIsTickerPickerOpen(true);
-      return;
-    }
 
     let conversationId = activeConversation?.conversation_id ?? null;
     if (!conversationId) {
@@ -441,11 +484,6 @@ export function ChatApp() {
 
   const onStarterPrompt = async (text: string) => {
     if (isStreaming) return;
-    if (!tickers.length) {
-      setInput(text);
-      setIsTickerPickerOpen(true);
-      return;
-    }
     await sendText(text);
   };
 
@@ -778,6 +816,8 @@ export function ChatApp() {
                   setActiveCitationsMessageId(id);
                   setIsCitationsOpen(true);
                 }}
+                onOpenTickerPicker={() => setIsTickerPickerOpen(true)}
+                onQuickReply={(text) => onStarterPrompt(text)}
               />
             </div>
           ) : (

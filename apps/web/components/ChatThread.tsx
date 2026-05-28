@@ -1,6 +1,7 @@
 "use client";
 
-import { Quote, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, Quote, TriangleAlert } from "lucide-react";
+import { useState } from "react";
 
 import type { ChatMessage } from "@/lib/types";
 
@@ -48,11 +49,17 @@ export function ChatThread({
   messages,
   activeCitationsMessageId,
   onSelectCitationsMessage,
+  onOpenTickerPicker,
+  onQuickReply,
 }: {
   messages: ChatMessage[];
   activeCitationsMessageId: string | null;
   onSelectCitationsMessage: (id: string) => void;
+  onOpenTickerPicker: () => void;
+  onQuickReply: (text: string) => void;
 }) {
+  const [detailsOpenId, setDetailsOpenId] = useState<string | null>(null);
+
   return (
     <div className="space-y-4">
       {messages.map((m) => {
@@ -62,6 +69,10 @@ export function ChatThread({
         const isActive = activeCitationsMessageId === m.id;
         const display = isUser ? m.content : stripInlineCitations(m.content);
         const showLoader = !isUser && isStreaming && !display.trim() && !m.error;
+        const clarification = !isUser ? m.clarification : undefined;
+        const hasDetails =
+          !isUser && ((m.agentSteps?.length ?? 0) > 0 || (m.meta && Object.keys(m.meta).length > 0));
+        const detailsOpen = detailsOpenId === m.id;
 
         return (
           <div
@@ -94,6 +105,42 @@ export function ChatThread({
                 )}
               </div>
 
+              {!isUser && clarification ? (
+                <div className="mt-3 rounded-xl border border-border/70 bg-bg/15 p-3">
+                  <div className="text-[11px] font-semibold text-text">Clarification needed</div>
+                  {display.trim() && display.trim() === (clarification.question || "").trim() ? (
+                    <div className="mt-1 text-xs text-muted">Choose an option to continue.</div>
+                  ) : (
+                    <div className="mt-1 text-xs text-muted">{clarification.question}</div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {clarification.kind === "tickers" || clarification.kind === "comparison_scope" ? (
+                      <button
+                        type="button"
+                        onClick={onOpenTickerPicker}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-bg/25 px-3 py-1.5 text-xs font-semibold text-text hover:bg-bg/40 transition"
+                      >
+                        Select tickers
+                      </button>
+                    ) : null}
+
+                    {clarification.options?.length
+                      ? clarification.options.map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => onQuickReply(opt)}
+                            className="inline-flex items-center rounded-full border border-border/70 bg-bg/25 px-3 py-1.5 text-xs font-semibold text-text hover:bg-bg/40 transition"
+                          >
+                            {opt}
+                          </button>
+                        ))
+                      : null}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="mt-2 flex items-center justify-between gap-3 text-[11px] opacity-90">
                 <div className="text-muted">{formatTime(m.createdAt)}</div>
                 {!isUser ? (
@@ -103,6 +150,22 @@ export function ChatThread({
                         <TriangleAlert size={12} className="text-danger" />
                         Error
                       </span>
+                    ) : null}
+
+                    {hasDetails && !isStreaming ? (
+                      <button
+                        type="button"
+                        onClick={() => setDetailsOpenId((cur) => (cur === m.id ? null : m.id))}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-bg/15 px-2 py-0.5 text-text hover:bg-bg/30 transition"
+                        title="Show agent details"
+                      >
+                        {detailsOpen ? (
+                          <ChevronDown size={12} className="text-muted" />
+                        ) : (
+                          <ChevronRight size={12} className="text-muted" />
+                        )}
+                        Details
+                      </button>
                     ) : null}
 
                     {citationsCount > 0 && !isStreaming ? (
@@ -127,6 +190,33 @@ export function ChatThread({
                   </div>
                 ) : null}
               </div>
+
+              {!isUser && hasDetails && detailsOpen ? (
+                <div className="mt-3 rounded-xl border border-border/70 bg-bg/10 p-3 text-[11px] text-muted">
+                  <div className="font-semibold text-text">Agent details</div>
+                  <div className="mt-2 space-y-1">
+                    {(m.agentSteps ?? []).map((s, idx) => (
+                      <div key={`${m.id}:step:${idx}`} className="flex flex-wrap gap-2">
+                        <span className="rounded-full border border-border/70 bg-bg/20 px-2 py-0.5 font-mono text-[10px] text-text/90">
+                          {String(s.step ?? "step")}
+                        </span>
+                        {"retrieval_ms" in s ? <span>retrieval_ms={String((s as any).retrieval_ms)}</span> : null}
+                        {"hits" in s ? <span>hits={String((s as any).hits)}</span> : null}
+                        {"decision" in s ? <span>decision={String((s as any).decision)}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+
+                  {m.meta ? (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer select-none text-[11px] text-text/90">Raw payload</summary>
+                      <pre className="mt-2 max-h-56 overflow-auto rounded-lg border border-border/70 bg-bg/20 p-2 text-[10px] leading-relaxed text-text/90">
+                        {JSON.stringify({ meta: m.meta, agentSteps: m.agentSteps ?? [] }, null, 2)}
+                      </pre>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
 
               {m.error ? (
                 <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-text">

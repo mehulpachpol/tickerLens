@@ -1,5 +1,5 @@
 # STOCK INTELLIGENCE RAG PLATFORM (NSE Multi‑Ticker)
-## Project Tasks — 11 Phases (Open‑Source + Free Stack)
+## Project Tasks — 12 Phases (Open‑Source + Free Stack)
 
 **Non‑negotiables**
 - **Platform components are open-source + free** (runtime, DBs, indexes, observability). **Models use OpenAI API** during early phases (paid), with a later option to switch to self-hosted open models.
@@ -321,6 +321,113 @@
 
 **Deliverables**
 - E2E evals + dashboards + security controls + deployable stack.
+
+---
+
+## Phase 12 — Agent Controller v1 (Planner + Clarifier + Tools)
+**Outcome**: Upgrade the “single-shot RAG call” into an interactive, investor-grade agent that can:
+
+- Ask clarifying questions when the request is underspecified
+- Choose an appropriate retrieval plan (single-pass vs multi-step)
+- Use tools (RAG retrieval + financial data) to answer number/statement questions
+- Preserve trust: explicit sourcing, dates, and an auditable execution trail
+
+### 12.1 Agent Controller (Core Loop)
+**Goal**: A deterministic controller around the model (not “more prompt”), implemented as a state machine.
+
+**Steps**
+1. Define an agent state machine (server-side):
+   - `analyze_intent` → `plan` → `retrieve` → `answerability_gate`
+   - If insufficient: `ask_clarifying_question`
+   - Else: `generate_answer` → `validate_citations` → `finalize`
+2. Add intent detection/routing (examples):
+   - comparison vs single ticker
+   - “latest” vs historical
+   - “show all mentions” (exhaustive) vs “summarize” (selective)
+   - financial statements / ratios (tool-eligible)
+3. Add an answerability gate (policy):
+   - Decide: Answer now / Ask clarification / Abstain + suggest documents to ingest
+   - Gate inputs: coverage across tickers, #evidence chunks, recency match, citation validity
+4. Extend streaming protocol:
+   - Add `event: agent_step` for transparency (optional to show in UI)
+   - Add `event: clarify` when the agent needs user input (one question at a time)
+5. Persist an “agent run ledger” (per run):
+   - chosen plan, tool calls, filters, doc scope decisions, timings, final citations
+
+### 12.2 Tool: Yahoo Finance Fundamentals (Dev/Free Source)
+**Goal**: When the user asks about “financials / balance sheet / cash flow / ratios / holders / price history”, the agent can enrich the response using Yahoo Finance-derived fundamentals.
+
+**Implementation approach (Python)**
+- Use `yfinance` (OSS wrapper) to fetch data from Yahoo Finance endpoints.
+- Normalize output into a stable schema and cache results.
+- Treat tool outputs as “external data source” and label them clearly with timestamp and symbol.
+
+**What we can usually fetch (free endpoints; availability varies by ticker/market)**
+1. General details:
+   - company name, sector/industry, employees, business summary, website
+2. Key valuation metrics:
+   - market cap, enterprise value, trailing/forward P/E, PEG, P/B, P/S (where available)
+3. Profitability/performance:
+   - ROE/ROA, gross/operating/net margins (where available)
+4. Risk & price history:
+   - beta, 52w high/low, 50D/200D moving averages (compute from price history)
+5. Debt & liquidity:
+   - current ratio, total cash/debt, debt-to-equity (where available)
+6. Financial statements:
+   - income statement (`financials` / `income_stmt`)
+   - balance sheet (`balance_sheet`)
+   - cash flow (`cashflow`)
+7. Holders:
+   - major holders breakdown + top institutional holders + mutual fund holders (availability varies; often better for US tickers)
+
+**Important notes**
+- Yahoo Finance data access via unofficial wrappers is typically suited to research/dev; for true production/commercial reliability, plan a path to a licensed market-data provider.
+- For NSE symbols, adopt a canonical symbol mapping strategy (e.g. `INFY` → `INFY.NS`) and store it in `companies`.
+
+**Steps**
+1. Add a `marketdata` service module (sync, cached):
+   - input: internal ticker + exchange context
+   - output: normalized JSON + `as_of` timestamp + raw source fields (for audit)
+2. Add a tool contract for the agent:
+   - `get_fundamentals(ticker, sections=[...])`
+   - `get_price_summary(ticker, window=...)`
+   - `get_holders(ticker)`
+3. Add caching + rate limiting:
+   - Redis cache keyed by `(symbol, section, as_of_day)`
+   - strict limits to avoid Yahoo throttling
+4. Add tool-grounding rules:
+   - If a claim comes from Yahoo tool output, tag it as such and avoid mixing it with filing citations.
+   - If the tool is unavailable for a ticker, the agent must say “not available” and fall back to filings-only.
+
+### 12.3 Clarifying Questions UX
+**Goal**: A high-trust interactive flow (one question at a time).
+
+**Steps**
+1. Add clarification prompts for common ambiguity:
+   - timeframe (FY24 vs latest quarter vs “since FY21”)
+   - doc type preference (annual report vs concall vs investor deck)
+   - “financials” source choice (Yahoo tool vs filings-only vs both)
+2. UI: render a “clarify” card with quick-select options (chips) + free-text.
+3. Persist clarification decisions in conversation context.
+
+### 12.4 Agent Evaluation (Minimal)
+**Goal**: prevent regressions in intelligence and trust as we add agentic behavior.
+
+**Steps**
+1. Add test cases for:
+   - clarification triggered when needed
+   - tool used only when relevant
+   - citations remain valid + no mixed attribution
+2. Track:
+   - clarification rate
+   - tool-call rate + failures
+   - p50/p95 latency impact (“agent tax”)
+
+**Learning goals**
+- Turning RAG into an agent (planning, tool use, clarifications) without losing correctness or blowing up latency.
+
+**Deliverables**
+- Agent controller v1 + Yahoo fundamentals tool + clarifying question UX + basic evals.
 
 ---
 

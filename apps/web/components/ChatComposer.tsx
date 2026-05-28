@@ -83,7 +83,7 @@ export function ChatComposer({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? "Add tickers to start..." : "Message TickerLens..."}
+          placeholder={disabled ? "Ask a question (add tickers for best results)..." : "Message TickerLens..."}
           rows={1}
           className="no-scrollbar max-h-44 w-full resize-none overflow-y-auto bg-transparent px-1.5 py-2 text-sm leading-relaxed text-text placeholder:text-muted outline-none disabled:opacity-70 [scrollbar-gutter:stable]"
         />
