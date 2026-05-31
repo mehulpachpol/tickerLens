@@ -34,6 +34,9 @@ _FINANCIALS_TOOL_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\b(?:p/e|pe\s+ratio|price\s+to\s+earnings)\b", re.IGNORECASE),
     re.compile(r"\b(?:p/b|price\s+to\s+book)\b", re.IGNORECASE),
     re.compile(r"\b(?:roe|roa)\b", re.IGNORECASE),
+    re.compile(r"\b(?:holders?|institutional\s+holders?|mutual\s+fund\s+holders?)\b", re.IGNORECASE),
+    re.compile(r"\b(?:52[\u2011\u2013\u2014\\-]?week|52w)\b", re.IGNORECASE),
+    re.compile(r"\b(?:moving\s+average|50[\u2011\u2013\u2014\\-]?day|200[\u2011\u2013\u2014\\-]?day)\b", re.IGNORECASE),
 ]
 
 _TICKER_TOKEN_RE = re.compile(r"\b[A-Z][A-Z0-9&]{1,11}\b")
@@ -151,4 +154,3 @@ def maybe_clarify(*, intent: AgentIntent, tickers: list[str] | None) -> AgentCla
         )
 
     return None
-

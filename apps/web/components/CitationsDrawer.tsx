@@ -23,6 +23,18 @@ function formatPages(c: Citation) {
   return null;
 }
 
+function formatDocType(c: Citation) {
+  if (c.document_type === "yahoo_finance") return "Yahoo Finance";
+  if (!c.document_type) return null;
+  return c.document_type.replaceAll("_", " ");
+}
+
+function formatDateLabel(c: Citation) {
+  if (!c.filing_date) return null;
+  if (c.document_type === "yahoo_finance") return `as of ${c.filing_date}`;
+  return `filed ${c.filing_date}`;
+}
+
 export function CitationsDrawer({
   open,
   onOpenChange,
@@ -34,6 +46,7 @@ export function CitationsDrawer({
 }) {
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const citations = payload?.citations ?? [];
+  const hasYahoo = citations.some((c) => c.document_type === "yahoo_finance");
 
   const openPdf = async (c: Citation) => {
     if (!c.doc_id) return;
@@ -119,14 +132,19 @@ export function CitationsDrawer({
           <div className="px-4 py-6 text-sm text-muted">No citations for this message.</div>
         ) : (
           <div className="h-[calc(100dvh-3.25rem)] overflow-auto p-3">
+            {hasYahoo ? (
+              <div className="mb-3 rounded-xl border border-border/70 bg-bg/15 p-3 text-xs text-muted">
+                Includes Yahoo Finance snapshots (external source). Data availability and fields can vary by ticker.
+              </div>
+            ) : null}
             <ul className="space-y-2">
               {citations.map((c) => {
                 const pages = formatPages(c);
                 const titleBits = [
                   c.ticker ?? null,
-                  c.document_type ?? null,
+                  formatDocType(c),
                   c.fiscal_year ?? null,
-                  c.filing_date ? `filed ${c.filing_date}` : null,
+                  formatDateLabel(c),
                 ].filter(Boolean);
 
                 return (

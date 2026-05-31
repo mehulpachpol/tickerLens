@@ -825,7 +825,7 @@ export function ChatApp() {
               <div className="text-center">
                 <div className="text-3xl font-semibold tracking-tight text-text">Ready when you are.</div>
                 <div className="mt-2 text-sm text-muted">
-                  Select tickers, then ask a question grounded in filings and reports.
+                  Add tickers (or mention them in your question) for best results. If anything is missing, TickerLens will ask one follow-up.
                 </div>
               </div>
 

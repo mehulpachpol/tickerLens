@@ -60,6 +60,27 @@ export function ChatThread({
 }) {
   const [detailsOpenId, setDetailsOpenId] = useState<string | null>(null);
 
+  const formatStepExtras = (s: any): string[] => {
+    if (!s || typeof s !== "object") return [];
+    const out: string[] = [];
+    const push = (k: string, v: unknown) => {
+      if (v === undefined || v === null) return;
+      out.push(`${k}=${String(v)}`);
+    };
+
+    push("status", s.status);
+    push("tool_ms", s.tool_ms);
+    push("ok", s.ok);
+    if (Array.isArray(s.errors) && s.errors.length) push("errors", s.errors.length);
+
+    push("retrieval_ms", s.retrieval_ms);
+    push("hits", s.hits);
+    push("decision", s.decision);
+    push("reason", s.reason);
+
+    return out;
+  };
+
   return (
     <div className="space-y-4">
       {messages.map((m) => {
@@ -200,9 +221,9 @@ export function ChatThread({
                         <span className="rounded-full border border-border/70 bg-bg/20 px-2 py-0.5 font-mono text-[10px] text-text/90">
                           {String(s.step ?? "step")}
                         </span>
-                        {"retrieval_ms" in s ? <span>retrieval_ms={String((s as any).retrieval_ms)}</span> : null}
-                        {"hits" in s ? <span>hits={String((s as any).hits)}</span> : null}
-                        {"decision" in s ? <span>decision={String((s as any).decision)}</span> : null}
+                        {formatStepExtras(s as any).map((t) => (
+                          <span key={`${m.id}:step:${idx}:${t}`}>{t}</span>
+                        ))}
                       </div>
                     ))}
                   </div>

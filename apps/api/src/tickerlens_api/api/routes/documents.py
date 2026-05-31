@@ -131,6 +131,26 @@ def download(doc_id: str, request: Request, db: Session = Depends(get_db)) -> Do
     # Phase 11.3: prevent hotlinking / runaway downloads.
     rate_limit_request(request=request, prefix="documents:download", limit=settings.rl_doc_download_per_minute, window_s=60)
 
+    # Phase 12.2: allow "virtual" tool sources (e.g. Yahoo Finance) to be opened from citations.
+    if doc_id.startswith("yf:"):
+        from tickerlens_api.tools.yahoo_finance import yahoo_quote_url
+
+        symbol = doc_id.removeprefix("yf:").strip()
+        if not symbol:
+            raise HTTPException(status_code=404, detail="Document file not found")
+
+        url = yahoo_quote_url(symbol)
+        expires = 3600
+        log_audit(
+            db,
+            action="documents.download",
+            request=request,
+            user_id=getattr(request.state, "user_id", None),
+            status_code=200,
+            details={"doc_id": doc_id, "external": True},
+        )
+        return DownloadLinkResponse(doc_id=doc_id, url=url, expires_in_seconds=expires)
+
     doc_file = get_document_file(db, doc_id=doc_id)
     if not doc_file:
         raise HTTPException(status_code=404, detail="Document file not found")

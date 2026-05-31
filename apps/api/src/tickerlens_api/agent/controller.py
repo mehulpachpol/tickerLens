@@ -30,6 +30,48 @@ def _sse_event(*, event: str, data: dict | str) -> bytes:
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
 
+def _tool_def(*, name: str, description: str, parameters: dict) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "strict": True,
+            "parameters": parameters,
+        },
+    }
+
+
+def _agent_research_system_prompt() -> str:
+    return (
+        "You are TickerLens Agent Controller.\n"
+        "You are NOT allowed to answer the user directly in this phase.\n"
+        "You must operate by calling the provided tools in a loop.\n"
+        "\n"
+        "Policy:\n"
+        "- If tickers are missing, call tool_ask_user(kind='tickers', ...) to ask for tickers.\n"
+        "- For each run with tickers, call tool_yahoo_fundamentals first (Yahoo snapshot), then tool_rag_retrieve (filings).\n"
+        "- If filings retrieval returns few/no relevant results, call tool_doc_coverage to see what's available, then ask ONE follow-up question via tool_ask_user.\n"
+        "- When you have enough evidence to write a high-quality answer, call tool_finish_research.\n"
+        "\n"
+        "Important:\n"
+        "- Call exactly ONE tool per step.\n"
+        "- Keep tool arguments small and bounded.\n"
+    )
+
+
+def _agent_research_user_prompt(*, question: str, tickers: list[str], doc_ids: list[str] | None) -> str:
+    return (
+        "User question:\n"
+        f"{question.strip()}\n\n"
+        "Selected tickers:\n"
+        f"{', '.join(tickers)}\n\n"
+        "Doc scope (doc_ids) restriction:\n"
+        f"{', '.join(doc_ids or []) if doc_ids else '(none)'}\n\n"
+        "Run your tool loop now."
+    )
+
+
 def run_agent_stream(
     req: ChatStreamRequest,
     *,
@@ -75,25 +117,58 @@ def run_agent_stream(
     step("analyze_intent", details={"intent": ledger["intent"]})
     yield _sse_event(event="agent_step", data={"step": "analyze_intent", "intent": ledger["intent"]})
 
-    # If no tickers were provided, try extracting explicit tickers from the question.
-    if not (effective_tickers or []):
-        inferred = infer_tickers_from_question(db, question=req.question)
-        if inferred:
-            effective_tickers = inferred
-            step("infer_tickers", details={"tickers": effective_tickers, "reason": "found_in_question"})
-            yield _sse_event(event="agent_step", data={"step": "infer_tickers", "tickers": effective_tickers})
+    # If the question explicitly mentions tickers, prefer them over any pre-selected scope.
+    # This prevents a common UX failure mode: user had INFY selected, asks about TCS, and we still answer for INFY.
+    inferred = infer_tickers_from_question(db, question=req.question)
+    if inferred:
+        prev = list(effective_tickers or [])
+        prev_set = set(prev)
+        inferred_set = set(inferred)
 
-            # Keep conversation scope in sync so the UI reflects inferred scope.
-            if settings.auth_enabled and auth_user and conversation_id:
-                try:
-                    update_conversation(
-                        db,
-                        conversation_id=conversation_id,
-                        user_id=auth_user.user_id,
-                        tickers=list(effective_tickers),
-                    )
-                except Exception:
-                    pass
+        # For this *run*, always narrow scope to the explicitly mentioned tickers.
+        # (If the user wrote "TCS", we should retrieve for TCS even if INFY is selected.)
+        effective_tickers = inferred
+
+        # For the *conversation scope* (what the UI shows as selected), keep the previous
+        # tickers and append any newly mentioned ones. This matches user expectation:
+        # "I asked about a new ticker, so add it to my scope", without losing the old one.
+        merged_scope = list(prev)
+        for t in inferred:
+            if t not in prev_set:
+                merged_scope.append(t)
+
+        reason = "found_in_question" if not prev else ("narrow_to_question_tickers" if inferred_set.issubset(prev_set) else "narrow_and_expand_scope")
+
+        step(
+            "infer_tickers",
+            details={
+                "tickers_for_run": list(effective_tickers or []),
+                "conversation_scope": merged_scope,
+                "reason": reason,
+                "previous_scope": prev,
+            },
+        )
+        yield _sse_event(
+            event="agent_step",
+            data={
+                "step": "infer_tickers",
+                "tickers": list(effective_tickers or []),
+                "reason": reason,
+                "conversation_scope": merged_scope,
+            },
+        )
+
+        # Keep conversation scope in sync so the UI reflects the newly mentioned ticker(s).
+        if settings.auth_enabled and auth_user and conversation_id and merged_scope != prev:
+            try:
+                update_conversation(
+                    db,
+                    conversation_id=conversation_id,
+                    user_id=auth_user.user_id,
+                    tickers=merged_scope,
+                )
+            except Exception:
+                pass
 
     clarification = maybe_clarify(intent=intent, tickers=effective_tickers)
     if clarification:
@@ -170,7 +245,80 @@ def run_agent_stream(
     yield _sse_event(event="agent_step", data={"step": "plan", "plan": ledger["plan"]})
 
     # ------------------------------------------------------------------
-    # retrieve
+    # tool: Yahoo Finance fundamentals (Phase 12.2)
+    # ------------------------------------------------------------------
+    tool_chunk_ids: list[str] = []
+    tool_palette: dict[str, Citation] = {}
+    tool_context_by_ticker: dict[str, str] = {}
+    tool_chunk_id_by_ticker: dict[str, str] = {}
+    tool_errors: dict[str, str] = {}
+    tool_ms: int | None = None
+
+    if intent.tool_eligible_financials and (effective_tickers or []):
+        yield _sse_event(
+            event="agent_step",
+            data={"step": "tool_yahoo_finance", "status": "start", "tickers": list(effective_tickers or [])},
+        )
+        t_tool = time.perf_counter()
+        try:
+            from tickerlens_api.tools.yahoo_finance import (
+                get_yahoo_fundamentals_context,
+                make_yahoo_chunk_id,
+                make_yahoo_doc_id,
+            )
+
+            for tkr in list(effective_tickers or []):
+                try:
+                    tool_ctx = get_yahoo_fundamentals_context(ticker=tkr)
+                    chunk_id = make_yahoo_chunk_id(tool_ctx.yahoo_symbol)
+                    doc_id = make_yahoo_doc_id(tool_ctx.yahoo_symbol)
+                    ctx = tool_ctx.context_text
+
+                    tool_chunk_ids.append(chunk_id)
+                    tool_chunk_id_by_ticker[tkr] = chunk_id
+                    tool_palette[chunk_id] = Citation(
+                        chunk_id=chunk_id,
+                        ticker=tkr,
+                        doc_id=doc_id,
+                        document_type="yahoo_finance",
+                        fiscal_year=None,
+                        filing_date=tool_ctx.as_of,
+                        version=None,
+                        section="Fundamentals snapshot (Yahoo Finance)",
+                        page_start=None,
+                        page_end=None,
+                        download_endpoint=f"/documents/{doc_id}/download",
+                    )
+                    tool_context_by_ticker[tkr] = (
+                        f"(chunk_id={chunk_id} | document_type=yahoo_finance | as_of={tool_ctx.as_of})\n"
+                        f"{ctx.strip()}\n"
+                    )
+                except Exception as e:
+                    tool_errors[tkr] = str(e)
+        finally:
+            tool_ms = int((time.perf_counter() - t_tool) * 1000)
+            step(
+                "tool_yahoo_finance",
+                details={
+                    "tool_ms": tool_ms,
+                    "tickers": list(effective_tickers or []),
+                    "ok": len(tool_chunk_ids),
+                    "errors": list(tool_errors.keys()),
+                },
+            )
+            yield _sse_event(
+                event="agent_step",
+                data={
+                    "step": "tool_yahoo_finance",
+                    "status": "done",
+                    "tool_ms": tool_ms,
+                    "ok": len(tool_chunk_ids),
+                    "errors": list(tool_errors.keys()),
+                },
+            )
+
+    # ------------------------------------------------------------------
+    # retrieve (filings) — Yahoo first → filings second (per product policy)
     # ------------------------------------------------------------------
     search_req = HybridRerankRequest(
         query=req.question,
@@ -209,11 +357,35 @@ def run_agent_stream(
     step("retrieve", details={"retrieval_ms": retrieval_ms, "hits": len(retrieval.hits), "candidates": retrieval.candidates})
     yield _sse_event(event="agent_step", data={"step": "retrieve", "retrieval_ms": retrieval_ms, "hits": len(retrieval.hits)})
 
-    if not retrieval.hits:
-        msg = "Insufficient evidence in the provided documents."
-        step("answerability_gate", details={"decision": "abstain", "reason": "no_hits"})
-        yield _sse_event(event="agent_step", data={"step": "answerability_gate", "decision": "abstain", "reason": "no_hits"})
-        yield _sse_event(event="delta", data={"delta": msg})
+    # ------------------------------------------------------------------
+    # answerability gate
+    # ------------------------------------------------------------------
+    if not retrieval.hits and not tool_chunk_ids:
+        follow_up = (
+            "I’m not seeing relevant filing evidence in the currently ingested documents for this question. "
+            "Which document type should I use next (annual_report, concall, quarterly_results), or do you want to upload a specific filing to index?"
+        )
+        step("answerability_gate", details={"decision": "clarify", "reason": "no_hits"})
+        yield _sse_event(event="agent_step", data={"step": "answerability_gate", "decision": "clarify", "reason": "no_hits"})
+        step(
+            "ask_clarifying_question",
+            details={
+                "kind": "evidence_scope",
+                "reason": "no_hits",
+                "options": ["annual_report", "concall", "quarterly_results"],
+            },
+        )
+        yield _sse_event(
+            event="clarify",
+            data={
+                "kind": "evidence_scope",
+                "question": follow_up,
+                "options": ["annual_report", "concall", "quarterly_results"],
+            },
+        )
+
+        # Compatibility: also emit a delta so existing clients show the question.
+        yield _sse_event(event="delta", data={"delta": follow_up})
 
         if settings.auth_enabled and auth_user and conversation_id:
             add_message(
@@ -221,17 +393,17 @@ def run_agent_stream(
                 conversation_id=conversation_id,
                 user_id=auth_user.user_id,
                 role="assistant",
-                content=msg,
+                content=follow_up,
             )
 
-            # Store a minimal run ledger even when we abstain (useful for audits).
+            # Persist a run record so the UI keeps this turn even though we didn't answer.
             try:
                 add_rag_run(
                     db,
                     conversation_id=conversation_id,
                     user_id=auth_user.user_id,
                     question=req.question,
-                    answer=msg,
+                    answer=follow_up,
                     tickers=effective_tickers,
                     doc_ids=effective_doc_ids,
                     retrieval={"agent": ledger, "retrieval": retrieval.model_dump(), "temporal": temporal_debug},
@@ -242,15 +414,17 @@ def run_agent_stream(
             except Exception:
                 pass
 
-        inc_request(endpoint="chat.stream", status="abstain")
+        inc_request(endpoint="chat.stream", status="clarify")
         yield _sse_event(event="citations", data=ChatCitationsPayload(used_chunk_ids=[], citations=[]).model_dump())
-        yield _sse_event(event="done", data={"ok": True, "mode": "abstain"})
+        yield _sse_event(event="done", data={"ok": True, "mode": "clarify"})
         return
 
-    step("answerability_gate", details={"decision": "answer", "reason": "hits_present"})
-    yield _sse_event(event="agent_step", data={"step": "answerability_gate", "decision": "answer"})
+    reason = "hits_present" if retrieval.hits else "tool_only"
+    step("answerability_gate", details={"decision": "answer", "reason": reason})
+    yield _sse_event(event="agent_step", data={"step": "answerability_gate", "decision": "answer", "reason": reason})
 
-    allowed_chunk_ids = [h.chunk_id for h in retrieval.hits]
+    # Keep ordering consistent with context: Yahoo tool chunks first → filings chunks second.
+    allowed_chunk_ids = list(tool_chunk_ids) + [h.chunk_id for h in retrieval.hits]
     allowed_set = set(allowed_chunk_ids)
 
     # Build per-chunk citation palette from retrieval hits. The model cites chunk_id; we attach the rest.
@@ -271,7 +445,22 @@ def run_agent_stream(
             download_endpoint=download_endpoint,
         )
 
-    context = "\n\n".join(b.context for b in retrieval.context_blocks).strip()
+    # Build model context with strict separation:
+    # Yahoo Finance snapshots first → filings context second.
+    context_parts: list[str] = []
+    if tool_context_by_ticker:
+        context_parts.append("YAHOO FINANCE SNAPSHOTS (tool outputs):")
+        for tkr in sorted(tool_context_by_ticker.keys()):
+            context_parts.append(f"[{tkr} YAHOO FINANCE]\n{tool_context_by_ticker[tkr].strip()}")
+    if retrieval.context_blocks:
+        context_parts.append("FILINGS CONTEXT (ingested documents):")
+        for b in retrieval.context_blocks:
+            context_parts.append((b.context or "").strip())
+
+    # Tool palette entries overlay/extend document citations.
+    palette.update(tool_palette)
+
+    context = "\n\n".join(p for p in context_parts if p and p.strip()).strip()
 
     system = build_system_prompt()
     user_prompt = build_user_prompt(question=req.question, allowed_chunk_ids=allowed_chunk_ids, context=context)
@@ -283,6 +472,8 @@ def run_agent_stream(
         "candidates": retrieval.candidates,
         "agent": {"intent": ledger["intent"], "plan": ledger["plan"]},
     }
+    if tool_ms is not None:
+        meta["tools"] = {"yahoo_finance": {"tool_ms": tool_ms, "ok": len(tool_chunk_ids), "errors": list(tool_errors.keys())}}
     if temporal_debug:
         meta["temporal"] = temporal_debug
     if conversation_id:
